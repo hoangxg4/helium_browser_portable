@@ -68,7 +68,7 @@ jobs:
         Copy-Item $dll[0].FullName Helium_Portable\ -Force
         
         # Copy config files
-        Copy-Item helium++.ini,debloater.reg,default-apps-multi-profile.bat,update.bat Helium_Portable\ -Force
+        Copy-Item helium++.ini,default-apps-multi-profile.bat,update.bat Helium_Portable\ -Force
         
         # Copy WidevineCdm to root (Helium uses flat structure)
         Copy-Item WidevineCdm Helium_Portable\ -Recurse -Force

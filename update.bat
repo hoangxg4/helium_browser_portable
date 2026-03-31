@@ -1,110 +1,109 @@
 @echo off
 setlocal
-echo Helium Portable Updater v1.2
+echo Helium Portable Updater v1.3
 echo =======================================
 echo.
-(
-echo # Helium Portable Updater
-echo $ErrorActionPreference = "Stop"
-echo $appDir = "%~dp0".TrimEnd('\')
-echo $chromePath = Join-Path $appDir "chrome.exe"
-echo $manifestPath = Join-Path $appDir "*.manifest"
-echo $apiUrl = "https://api.github.com/repos/imputnet/helium-windows/releases"
-echo $tempDir = Join-Path $env:TEMP "HeliumUpdate"
-echo.
-echo try {
-echo   # Get current Helium version from manifest file
-echo   $manifestFile = Get-Item $manifestPath -ErrorAction SilentlyContinue
-echo   $currentVersion = if ($manifestFile) {
-echo     $manifestFile.Name -replace '\.manifest$', ''
-echo   } else {
-echo     "Not installed"
-echo   }
-echo.
-echo   # Get latest release
-echo   $allReleases = Invoke-RestMethod -Uri $apiUrl
-echo   $latestRelease = $allReleases ^| Where-Object { -not $_.prerelease } ^| Select-Object -First 1
-echo   $latestVersion = $latestRelease.tag_name
-echo   $downloadUrl = ($latestRelease.assets ^| Where-Object { $_.name -like "*x64-windows.zip*" }).browser_download_url
-echo.
-echo   if (-not $downloadUrl) {
-echo     Write-Host "Error: Could not find x64-windows.zip asset" -ForegroundColor Red
-echo     exit 1
-echo   }
-echo.
-echo   Write-Host "Current version: $currentVersion" -ForegroundColor Yellow
-echo   Write-Host "Latest version:  $latestVersion" -ForegroundColor Yellow
-echo   Write-Host
-echo.
-echo   if ($currentVersion -eq $latestVersion) {
-echo     Write-Host "Already up to date!" -ForegroundColor Green
-echo     exit 0
-echo   }
-echo.
-echo   $confirm = Read-Host "Do you want to update? (y/N)"
-echo   if ($confirm -ne 'y' -and $confirm -ne 'Y') { exit }
-echo.
-echo   # Stop running Helium processes
-echo   Write-Host "Stopping processes..."
-echo   Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
-echo   Start-Sleep 2
-echo.
-echo   # Prepare temp directory
-echo   if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
-echo   New-Item -ItemType Directory -Path $tempDir -Force ^| Out-Null
-echo   $zipFile = Join-Path $tempDir "helium.zip"
-echo.
-echo   # Download
-echo   Write-Host "Downloading latest version..."
-echo   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-echo   (New-Object System.Net.WebClient).DownloadFile($downloadUrl, $zipFile)
-echo.
-echo   # Extract
-echo   Write-Host "Extracting..."
-echo   Expand-Archive -Path $zipFile -DestinationPath $tempDir -Force
-echo.
-echo   # Find the extracted helium folder (e.g., helium_0.10.7.1_x64-windows)
-echo   $extractedDir = Get-ChildItem $tempDir -Directory ^| Where-Object { $_.Name -like "helium_*" } ^| Select-Object -First 1
-echo   if (-not $extractedDir) {
-echo     Write-Host "Error: Could not find extracted helium folder" -ForegroundColor Red
-echo     exit 1
-echo   }
-echo.
-echo   # Protected files that should not be overwritten
-echo   $protectedFiles = @("helium++.ini", "debloater.reg", "default-apps-multi-profile.bat", "update.bat")
-echo.
-echo   # Update files
-echo   Write-Host "Updating files..."
-echo   Get-ChildItem $extractedDir.FullName -Recurse ^| ForEach-Object {
-echo     $relativePath = $_.FullName.Substring($extractedDir.FullName.Length + 1)
-echo     $destPath = Join-Path $appDir $relativePath
-echo     if ($_.PSIsContainer) {
-echo       if (-not (Test-Path $destPath)) { New-Item -ItemType Directory -Path $destPath -Force ^| Out-Null }
-echo     } else {
-echo       if ($_.Name -in $protectedFiles) {
-echo         Write-Host "  Skipping protected: $($_.Name)"
-echo       } else {
-echo         $destFolder = Split-Path $destPath -Parent
-echo         if (-not (Test-Path $destFolder)) { New-Item -ItemType Directory -Path $destFolder -Force ^| Out-Null }
-echo         Copy-Item $_.FullName -Destination $destPath -Force
-echo       }
-echo     }
-echo   }
-echo.
-echo   # Cleanup
-echo   Remove-Item $tempDir -Recurse -Force
-echo.
-echo   # Verify
-echo   $newManifest = Get-Item (Join-Path $appDir "*.manifest") -ErrorAction SilentlyContinue
-echo   $newVersion = if ($newManifest) { $newManifest.Name -replace '\.manifest$', '' } else { "Unknown" }
-echo   Write-Host "Update completed! Version: $newVersion" -ForegroundColor Green
-echo.
-echo } catch {
-echo   Write-Host "Error: $_" -ForegroundColor Red
-echo   if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
-echo }
-echo.
-echo Read-Host "Press Enter to exit"
-) > "%TEMP%\helium_update.ps1"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\helium_update.ps1"
-del "%TEMP%\helium_update.ps1" 2>nul
+set "PS1=%TEMP%\helium_update.ps1"
+more +11 "%~f0" > "%PS1%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" "%~dp0"
+del "%PS1%" 2>nul
+exit /b
+$appDir = $args[0] -replace '\\$'
+$chromePath = Join-Path $appDir "chrome.exe"
+$manifestPath = Join-Path $appDir "*.manifest"
+$apiUrl = "https://api.github.com/repos/imputnet/helium-windows/releases"
+$tempDir = Join-Path $env:TEMP "HeliumUpdate"
+
+try {
+    # Get current Helium version from manifest file
+    $manifestFile = Get-Item $manifestPath -ErrorAction SilentlyContinue
+    $currentVersion = if ($manifestFile) {
+        $manifestFile.Name -replace '\.manifest$', ''
+    } else {
+        "Not installed"
+    }
+
+    # Get latest release
+    $allReleases = Invoke-RestMethod -Uri $apiUrl
+    $latestRelease = $allReleases | Where-Object { -not $_.prerelease } | Select-Object -First 1
+    $latestVersion = $latestRelease.tag_name
+    $downloadUrl = ($latestRelease.assets | Where-Object { $_.name -like "*x64-windows.zip*" }).browser_download_url
+
+    if (-not $downloadUrl) {
+        Write-Host "Error: Could not find x64-windows.zip asset" -ForegroundColor Red
+        exit 1
+    }
+
+    Write-Host "Current version: $currentVersion" -ForegroundColor Yellow
+    Write-Host "Latest version:  $latestVersion" -ForegroundColor Yellow
+    Write-Host
+
+    if ($currentVersion -eq $latestVersion) {
+        Write-Host "Already up to date!" -ForegroundColor Green
+        exit 0
+    }
+
+    $confirm = Read-Host "Do you want to update? (y/N)"
+    if ($confirm -ne 'y' -and $confirm -ne 'Y') { exit }
+
+    # Stop running Helium processes
+    Write-Host "Stopping processes..."
+    Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
+    Start-Sleep 2
+
+    # Prepare temp directory
+    if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+    $zipFile = Join-Path $tempDir "helium.zip"
+
+    # Download
+    Write-Host "Downloading latest version..."
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    (New-Object System.Net.WebClient).DownloadFile($downloadUrl, $zipFile)
+
+    # Extract
+    Write-Host "Extracting..."
+    Expand-Archive -Path $zipFile -DestinationPath $tempDir -Force
+
+    # Find the extracted helium folder
+    $extractedDir = Get-ChildItem $tempDir -Directory | Where-Object { $_.Name -like "helium_*" } | Select-Object -First 1
+    if (-not $extractedDir) {
+        Write-Host "Error: Could not find extracted helium folder" -ForegroundColor Red
+        exit 1
+    }
+
+    # Protected files
+    $protectedFiles = @("helium++.ini", "default-apps-multi-profile.bat", "update.bat")
+
+    # Update files
+    Write-Host "Updating files..."
+    Get-ChildItem $extractedDir.FullName -Recurse | ForEach-Object {
+        $relativePath = $_.FullName.Substring($extractedDir.FullName.Length + 1)
+        $destPath = Join-Path $appDir $relativePath
+        if ($_.PSIsContainer) {
+            if (-not (Test-Path $destPath)) { New-Item -ItemType Directory -Path $destPath -Force | Out-Null }
+        } else {
+            if ($_.Name -in $protectedFiles) {
+                Write-Host "  Skipping protected: $($_.Name)"
+            } else {
+                $destFolder = Split-Path $destPath -Parent
+                if (-not (Test-Path $destFolder)) { New-Item -ItemType Directory -Path $destFolder -Force | Out-Null }
+                Copy-Item $_.FullName -Destination $destPath -Force
+            }
+        }
+    }
+
+    # Cleanup
+    Remove-Item $tempDir -Recurse -Force
+
+    # Verify
+    $newManifest = Get-Item (Join-Path $appDir "*.manifest") -ErrorAction SilentlyContinue
+    $newVersion = if ($newManifest) { $newManifest.Name -replace '\.manifest$', '' } else { "Unknown" }
+    Write-Host "Update completed! Version: $newVersion" -ForegroundColor Green
+
+} catch {
+    Write-Host "Error: $_" -ForegroundColor Red
+    if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
+}
+
+Read-Host "Press Enter to exit"
