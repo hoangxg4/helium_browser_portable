@@ -1,6 +1,6 @@
 @echo off
 setlocal
-echo Helium Portable Updater v1.1
+echo Helium Portable Updater v1.2
 echo =======================================
 echo.
 (
@@ -23,9 +23,9 @@ echo   }
 echo.
 echo   # Get latest release
 echo   $allReleases = Invoke-RestMethod -Uri $apiUrl
-echo   $latestRelease = $allReleases | Where-Object { -not $_.prerelease } | Select-Object -First 1
+echo   $latestRelease = $allReleases ^| Where-Object { -not $_.prerelease } ^| Select-Object -First 1
 echo   $latestVersion = $latestRelease.tag_name
-echo   $downloadUrl = ($latestRelease.assets | Where-Object { $_.name -like "*x64-windows.zip*" }).browser_download_url
+echo   $downloadUrl = ($latestRelease.assets ^| Where-Object { $_.name -like "*x64-windows.zip*" }).browser_download_url
 echo.
 echo   if (-not $downloadUrl) {
 echo     Write-Host "Error: Could not find x64-windows.zip asset" -ForegroundColor Red
@@ -51,7 +51,7 @@ echo   Start-Sleep 2
 echo.
 echo   # Prepare temp directory
 echo   if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
-echo   New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+echo   New-Item -ItemType Directory -Path $tempDir -Force ^| Out-Null
 echo   $zipFile = Join-Path $tempDir "helium.zip"
 echo.
 echo   # Download
@@ -64,7 +64,7 @@ echo   Write-Host "Extracting..."
 echo   Expand-Archive -Path $zipFile -DestinationPath $tempDir -Force
 echo.
 echo   # Find the extracted helium folder (e.g., helium_0.10.7.1_x64-windows)
-echo   $extractedDir = Get-ChildItem $tempDir -Directory | Where-Object { $_.Name -like "helium_*" } | Select-Object -First 1
+echo   $extractedDir = Get-ChildItem $tempDir -Directory ^| Where-Object { $_.Name -like "helium_*" } ^| Select-Object -First 1
 echo   if (-not $extractedDir) {
 echo     Write-Host "Error: Could not find extracted helium folder" -ForegroundColor Red
 echo     exit 1
@@ -75,17 +75,17 @@ echo   $protectedFiles = @("helium++.ini", "debloater.reg", "default-apps-multi-
 echo.
 echo   # Update files
 echo   Write-Host "Updating files..."
-echo   Get-ChildItem $extractedDir.FullName -Recurse | ForEach-Object {
+echo   Get-ChildItem $extractedDir.FullName -Recurse ^| ForEach-Object {
 echo     $relativePath = $_.FullName.Substring($extractedDir.FullName.Length + 1)
 echo     $destPath = Join-Path $appDir $relativePath
 echo     if ($_.PSIsContainer) {
-echo       if (-not (Test-Path $destPath)) { New-Item -ItemType Directory -Path $destPath -Force | Out-Null }
+echo       if (-not (Test-Path $destPath)) { New-Item -ItemType Directory -Path $destPath -Force ^| Out-Null }
 echo     } else {
 echo       if ($_.Name -in $protectedFiles) {
 echo         Write-Host "  Skipping protected: $($_.Name)"
 echo       } else {
 echo         $destFolder = Split-Path $destPath -Parent
-echo         if (-not (Test-Path $destFolder)) { New-Item -ItemType Directory -Path $destFolder -Force | Out-Null }
+echo         if (-not (Test-Path $destFolder)) { New-Item -ItemType Directory -Path $destFolder -Force ^| Out-Null }
 echo         Copy-Item $_.FullName -Destination $destPath -Force
 echo       }
 echo     }

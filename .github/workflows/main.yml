@@ -64,6 +64,15 @@ jobs:
         # Copy config files
         Copy-Item helium++.ini,debloater.reg,default-apps-multi-profile.bat,update.bat Helium_Portable\ -Force
         
+        # Extract Chromium version for Widevine directory
+        $manifestFile = Get-ChildItem Helium_Portable\*.manifest | Select-Object -First 1
+        $chromiumVer = $manifestFile.Name -replace '\.manifest$', ''
+        
+        # Copy WidevineCdm to version-specific directory
+        $widevineDest = "Helium_Portable\$chromiumVer\WidevineCdm"
+        New-Item -Force -Type Directory $widevineDest | Out-Null
+        Copy-Item WidevineCdm\* $widevineDest\ -Recurse -Force
+        
         Compress-Archive Helium_Portable "${{ env.TAG }}.zip" -Force
         echo "ZIP=${{ env.TAG }}.zip" >> $env:GITHUB_ENV
 

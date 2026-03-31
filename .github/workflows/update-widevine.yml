@@ -1,0 +1,65 @@
+name: Update WidevineCdm
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download 7z
+      run: curl -L https://www.7-zip.org/a/7zr.exe -o 7zr.exe
+      shell: bash
+    
+    - name: Download and update
+      shell: bash
+      run: |
+        # Create temp directory
+        mkdir temp
+        cd temp
+        
+        # Get latest ungoogled-chromium release
+        URL=$(curl -s https://api.github.com/repos/macchrome/winchrome/releases | jq -r '[.[] | select(.prerelease == false)] | .[0] | .assets[] | select(.name | test("ungoogled-chromium-.*_Win64\\.7z$")) | .browser_download_url')
+        
+        # Get filename
+        FILENAME=$(echo "$URL" | sed 's/.*\///')
+        
+        # Download
+        curl -L "$URL" -o "$FILENAME"
+        
+        # Extract
+        ../7zr.exe x "$FILENAME"
+        
+        # Find WidevineCdm directory
+        WIDEVINE_PATH=$(find . -name "WidevineCdm" -type d | head -1)
+        
+        # Get new version
+        NEW_VERSION=$(jq -r '.version' "$WIDEVINE_PATH/manifest.json")
+        
+        # Get current version
+        CURRENT_VERSION=""
+        if [ -f "../WidevineCdm/manifest.json" ]; then
+          CURRENT_VERSION=$(jq -r '.version' ../WidevineCdm/manifest.json)
+        fi
+        
+        echo "Current: $CURRENT_VERSION"
+        echo "New: $NEW_VERSION"
+        
+        # Update if different
+        if [ "$NEW_VERSION" != "$CURRENT_VERSION" ]; then
+          echo "Updating WidevineCdm..."
+          cd ..
+          rm -rf WidevineCdm
+          cp -r "temp/$WIDEVINE_PATH" WidevineCdm
+          
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
+          git add WidevineCdm/
+          git commit -m "Update WidevineCdm to $NEW_VERSION"
+          git push
+        else
+          echo "Already up to date"
+        fi
