@@ -1,0 +1,132 @@
+Windows Registry Editor Version 5.00
+
+; Reset to defaults
+[-HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Chromium]
+
+; Configuration
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Chromium]
+
+; Disable AI features
+"GeminiSettings"=dword:00000001
+"GenAILocalFoundationalModelSettings"=dword:00000001
+"AutofillPredictionSettings"=dword:00000002
+"HelpMeWriteSettings"=dword:00000002
+"AIModeSettings"=dword:00000001
+
+; Disable Access Code Cast
+"AccessCodeCastEnabled"=dword:00000000
+
+; Disable Image Labels for accessibility
+"AccessibilityImageLabelsEnabled"=dword:00000000
+
+; Disable Alternate Error Pages
+"AlternateErrorPagesEnabled"=dword:00000000
+
+; Disable password leak alerts
+"PasswordDismissCompromisedAlertEnabled"=dword:00000000
+
+; Disable password protection warning
+"PasswordProtectionWarningTrigger"=dword:00000000
+
+; Disable QR Code Generator
+"QRCodeGeneratorEnabled"=dword:00000000
+
+; Disable Remote Debugging
+"RemoteDebuggingAllowed"=dword:00000000
+
+; Disable Roaming Profile Support
+"RoamingProfileSupportEnabled"=dword:00000000
+
+; Disable Safe Browsing Deep Scanning
+"SafeBrowsingDeepScanningEnabled"=dword:00000000
+
+; Disable Safe Browsing Proxied Real Time Checks
+"SafeBrowsingProxiedRealTimeChecksAllowed"=dword:00000000
+
+; Disable Safe Browsing Surveys
+"SafeBrowsingSurveysEnabled"=dword:00000000
+
+; Disable Shopping List
+"ShoppingListEnabled"=dword:00000000
+
+; Disable Side Search
+"SideSearchEnabled"=dword:00000000
+
+; Disable Sign-in Interception
+"SigninInterceptionEnabled"=dword:00000000
+
+; Disable User Feedback
+"UserFeedbackAllowed"=dword:00000000
+"FeedbackSurveysEnabled"=dword:00000000
+
+; Disable URL-keyed anonymized data collection
+"UrlKeyedAnonymizedDataCollectionEnabled"=dword:00000000
+
+; Enable Search Suggestions
+"SearchSuggestEnabled"=dword:00000001
+
+; Disable Autofill and password manager
+"AutofillAddressEnabled"=dword:00000000
+"AutofillCreditCardEnabled"=dword:00000000
+"PasswordManagerEnabled"=dword:00000000
+
+; Disable payment method query
+"PaymentMethodQueryEnabled"=dword:00000000
+
+; Disable background apps
+"BackgroundModeEnabled"=dword:00000000
+
+; Disable Privacy Sandbox prompts
+"PrivacySandboxPromptEnabled"=dword:00000000
+
+; Disable Spellcheck
+"SpellcheckEnabled"=dword:00000000
+
+; Disable Safe Browsing Extended Reporting
+"SafeBrowsingExtendedReportingEnabled"=dword:00000000
+
+; Show full URLs in address bar
+"ShowFullUrlsInAddressBar"=dword:00000001
+
+; Block geolocation on all sites
+"DefaultGeolocationSetting"=dword:00000002
+
+; Block notifications on all sites
+"DefaultNotificationsSetting"=dword:00000002
+
+; Block motion sensors
+"DefaultSensorsSetting"=dword:00000002
+
+; Block third-party cookies
+"BlockThirdPartyCookies"=dword:00000001
+
+; Safe Browsing Standard protection
+"SafeBrowsingProtectionLevel"=dword:00000001
+
+; Disable password leak detection
+"PasswordLeakDetectionEnabled"=dword:00000000
+
+; Enable Memory Saver
+"HighEfficiencyModeEnabled"=dword:00000001
+
+; Memory Saver Balanced
+"MemorySaverModeSavings"=dword:00000001
+
+; Enable Preload pages
+"NetworkPredictionOptions"=dword:00000003
+
+; Enable hardware acceleration
+"HardwareAccelerationModeEnabled"=dword:00000001
+
+; Prevent WebRTC IP leaks
+"WebRtcIPHandling"="disable_non_proxied_udp"
+
+; Always use HTTPS
+"HttpsUpgradesEnabled"=dword:00000001
+"HttpsOnlyMode"="force_enabled"
+
+; Disable default browser check
+"DefaultBrowserSettingEnabled"=dword:00000000
+
+; Disable spell check service
+"SpellCheckServiceEnabled"=dword:00000000

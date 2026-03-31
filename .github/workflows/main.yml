@@ -1,0 +1,78 @@
+name: Build Helium Portable
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Check versions and release
+      id: check
+      run: |
+        $helium = Invoke-RestMethod "https://api.github.com/repos/imputnet/helium-windows/releases/latest"
+        $helium_ver = $helium.tag_name
+        
+        $plus = Invoke-RestMethod "https://api.github.com/repos/bibicadotnet/Chromium_SetDLL/releases/latest"
+        $plus_ver = $plus.tag_name -replace '^v',''
+        $plus_url = ($plus.assets | Where-Object { $_.name -like "Chrome*.7z" }).browser_download_url
+        
+        $tag = "helium-portable-x64_${helium_ver}_${plus_ver}"
+        
+        echo "HELIUM_VER=$helium_ver" >> $env:GITHUB_ENV
+        $helium_asset = $helium.assets | Where-Object { $_.name -like "*x64-windows.zip*" } | Select-Object -First 1
+        echo "HELIUM_URL=$($helium_asset.browser_download_url)" >> $env:GITHUB_ENV
+        echo "PLUS_VER=$plus_ver" >> $env:GITHUB_ENV
+        echo "PLUS_URL=$plus_url" >> $env:GITHUB_ENV
+        echo "TAG=$tag" >> $env:GITHUB_ENV
+        
+        try {
+          Invoke-RestMethod "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" -Headers @{Authorization="Bearer $env:GITHUB_TOKEN"}
+          echo "EXISTS=true" >> $env:GITHUB_ENV
+        } catch {
+          echo "EXISTS=false" >> $env:GITHUB_ENV
+        }
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - uses: actions/checkout@v4
+      if: env.EXISTS == 'false'
+
+    - name: Build
+      if: env.EXISTS == 'false'
+      run: |
+        curl -sSL "${{ env.HELIUM_URL }}" -o helium.zip
+        curl -sSL "${{ env.PLUS_URL }}" -o chrome_plus.7z
+        curl -sSL https://www.7-zip.org/a/7zr.exe -o 7zr.exe
+        
+        Expand-Archive -Path helium.zip -DestinationPath helium_extracted -Force
+        ./7zr.exe x chrome_plus.7z
+        
+        New-Item -Force -Type Directory Helium_Portable | Out-Null
+        
+        # Get the extracted helium folder (e.g., helium_0.10.7.1_x64-windows)
+        $heliumDir = Get-ChildItem helium_extracted -Directory | Select-Object -First 1
+        Copy-Item "$($heliumDir.FullName)\*" Helium_Portable\ -Recurse -Force
+        
+        # Copy version.dll from Chrome++ x64
+        $dll = Get-ChildItem -Recurse version.dll | Where-Object { $_.FullName -match '\\x64\\App\\' }
+        Copy-Item $dll[0].FullName Helium_Portable\ -Force
+        
+        # Copy config files
+        Copy-Item helium++.ini,debloater.reg,default-apps-multi-profile.bat,update.bat Helium_Portable\ -Force
+        
+        Compress-Archive Helium_Portable "${{ env.TAG }}.zip" -Force
+        echo "ZIP=${{ env.TAG }}.zip" >> $env:GITHUB_ENV
+
+    - name: Release
+      if: env.EXISTS == 'false'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ${{ env.ZIP }}
+        tag_name: ${{ env.TAG }}
+        name: Helium ${{ env.HELIUM_VER }} + Chrome++ ${{ env.PLUS_VER }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
