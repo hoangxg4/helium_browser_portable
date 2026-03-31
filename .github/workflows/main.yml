@@ -29,11 +29,17 @@ jobs:
         echo "PLUS_URL=$plus_url" >> $env:GITHUB_ENV
         echo "TAG=$tag" >> $env:GITHUB_ENV
         
-        try {
-          Invoke-RestMethod "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" -Headers @{Authorization="Bearer $env:GITHUB_TOKEN"}
-          echo "EXISTS=true" >> $env:GITHUB_ENV
-        } catch {
+        # Skip version check on manual dispatch — always build
+        if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+          echo "Manual dispatch detected — skipping version check"
           echo "EXISTS=false" >> $env:GITHUB_ENV
+        } else {
+          try {
+            Invoke-RestMethod "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" -Headers @{Authorization="Bearer $env:GITHUB_TOKEN"}
+            echo "EXISTS=true" >> $env:GITHUB_ENV
+          } catch {
+            echo "EXISTS=false" >> $env:GITHUB_ENV
+          }
         }
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -72,10 +78,11 @@ jobs:
 
     - name: Release
       if: env.EXISTS == 'false'
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         files: ${{ env.ZIP }}
         tag_name: ${{ env.TAG }}
         name: Helium ${{ env.HELIUM_VER }} + Chrome++ ${{ env.PLUS_VER }}
+        overwrite: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
