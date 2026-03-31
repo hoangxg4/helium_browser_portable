@@ -62,7 +62,7 @@ try {
         exit 1
     }
 
-    $protectedFiles = @("helium++.ini", "default-apps-multi-profile.bat", "update.bat")
+    $protectedFiles = @("chrome++.ini", "default-apps-multi-profile.bat", "update.bat")
 
     Write-Host "Updating files..."
     Get-ChildItem $extractedDir.FullName -Recurse | ForEach-Object {

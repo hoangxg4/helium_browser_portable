@@ -10,7 +10,7 @@ Helium Browser Portable - Chromium-based browser by [imputnet](https://github.co
 - Auto-update script to fetch latest Helium releases
 
 ### Files
-- `helium++.ini` — Chrome++ configuration for portable mode
+- `chrome++.ini` — Chrome++ configuration for portable mode
 - `debloater.reg` — Disable unnecessary Chromium features
 - `default-apps-multi-profile.bat` — Set Helium as default browser
 - `update.bat` — Auto-update to the latest Helium release
