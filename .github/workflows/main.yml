@@ -73,6 +73,9 @@ jobs:
         # Copy WidevineCdm to root (Helium uses flat structure)
         Copy-Item WidevineCdm Helium_Portable\ -Recurse -Force
         
+        # Write Helium version for update.bat to detect
+        Set-Content -Path "Helium_Portable\version.txt" -Value "${{ env.HELIUM_VER }}"
+        
         Compress-Archive Helium_Portable "${{ env.TAG }}.zip" -Force
         echo "ZIP=${{ env.TAG }}.zip" >> $env:GITHUB_ENV
 

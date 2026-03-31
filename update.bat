@@ -11,14 +11,13 @@ del "%PS1%" 2>nul
 exit /b
 
 $appDir = $env:APP_DIR
+$versionPath = Join-Path $appDir "version.txt"
 $chromePath = Join-Path $appDir "chrome.exe"
-$manifestPath = Join-Path $appDir "*.manifest"
 $apiUrl = "https://api.github.com/repos/imputnet/helium-windows/releases"
 $tempDir = Join-Path $env:TEMP "HeliumUpdate"
 
 try {
-    $manifestFile = Get-Item $manifestPath -ErrorAction SilentlyContinue
-    $currentVersion = if ($manifestFile) { $manifestFile.Name -replace '\.manifest$', '' } else { "Not installed" }
+    $currentVersion = if (Test-Path $versionPath) { Get-Content $versionPath -Raw } else { "Not installed" }
 
     $allReleases = Invoke-RestMethod -Uri $apiUrl
     $latestRelease = $allReleases | Where-Object { -not $_.prerelease } | Select-Object -First 1
@@ -84,8 +83,7 @@ try {
 
     Remove-Item $tempDir -Recurse -Force
 
-    $newManifest = Get-Item (Join-Path $appDir "*.manifest") -ErrorAction SilentlyContinue
-    $newVersion = if ($newManifest) { $newManifest.Name -replace '\.manifest$', '' } else { "Unknown" }
+    $newVersion = if (Test-Path $versionPath) { Get-Content $versionPath -Raw } else { "Unknown" }
     Write-Host "Update completed! Version: $newVersion" -ForegroundColor Green
 
 } catch {
