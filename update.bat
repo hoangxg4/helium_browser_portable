@@ -1,6 +1,6 @@
 @echo off
 setlocal
-echo Helium Portable Updater v1.5
+echo Helium Portable Updater v1.5.1 (Fixed)
 echo =======================================
 echo.
 set "APP_DIR=%~dp0"
@@ -17,8 +17,10 @@ $apiUrl = "https://api.github.com/repos/imputnet/helium-windows/releases"
 $tempDir = Join-Path $env:TEMP "HeliumUpdate"
 
 try {
-    $currentVersion = if (Test-Path $versionPath) { Get-Content $versionPath -Raw } else { "Not installed" }
+    # 1. Kiểm tra phiên bản hiện tại
+    $currentVersion = if (Test-Path $versionPath) { (Get-Content $versionPath -Raw).Trim() } else { "Not installed" }
 
+    # 2. Lấy thông tin từ GitHub API
     $allReleases = Invoke-RestMethod -Uri $apiUrl
     $latestRelease = $allReleases | Where-Object { -not $_.prerelease } | Select-Object -First 1
     $latestVersion = $latestRelease.tag_name
@@ -33,41 +35,48 @@ try {
     Write-Host "Latest version:  $latestVersion" -ForegroundColor Yellow
     Write-Host
 
+    # 3. So sánh phiên bản
     if ($currentVersion -eq $latestVersion) {
         Write-Host "Already up to date!" -ForegroundColor Green
+        Read-Host "Press Enter to exit"
         exit 0
     }
 
     $confirm = Read-Host "Do you want to update? (y/N)"
     if ($confirm -ne 'y' -and $confirm -ne 'Y') { exit }
 
-    Write-Host "Stopping processes..."
+    # 4. Dọn dẹp tiến trình
+    Write-Host "Stopping processes..." -Cyan
     Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
     Start-Sleep 2
 
+    # 5. Tải về và giải nén
     if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
     $zipFile = Join-Path $tempDir "helium.zip"
 
-    Write-Host "Downloading latest version..."
+    Write-Host "Downloading latest version..." -Cyan
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    (New-Object System.Net.WebClient).DownloadFile($downloadUrl, $zipFile)
+    Invoke-WebRequest -Uri $downloadUrl -OutFile $zipFile
 
-    Write-Host "Extracting..."
+    Write-Host "Extracting..." -Cyan
     Expand-Archive -Path $zipFile -DestinationPath $tempDir -Force
 
+    # Tìm thư mục chứa nội dung sau khi giải nén
     $extractedDir = Get-ChildItem $tempDir -Directory | Where-Object { $_.Name -like "helium_*" } | Select-Object -First 1
     if (-not $extractedDir) {
         Write-Host "Error: Could not find extracted helium folder" -ForegroundColor Red
         exit 1
     }
 
+    # 6. Cập nhật Files
     $protectedFiles = @("chrome++.ini", "default-apps-multi-profile.bat", "update.bat")
-
-    Write-Host "Updating files..."
+    Write-Host "Updating files..." -Cyan
+    
     Get-ChildItem $extractedDir.FullName -Recurse | ForEach-Object {
         $relativePath = $_.FullName.Substring($extractedDir.FullName.Length + 1)
         $destPath = Join-Path $appDir $relativePath
+        
         if ($_.PSIsContainer) {
             if (-not (Test-Path $destPath)) { New-Item -ItemType Directory -Path $destPath -Force | Out-Null }
         } else {
@@ -81,13 +90,18 @@ try {
         }
     }
 
+    # 7. CHỐT PHIÊN BẢN (Sửa lỗi quan trọng nhất ở đây)
+    Set-Content -Path $versionPath -Value $latestVersion -Force
+
+    # Dọn dẹp rác
     Remove-Item $tempDir -Recurse -Force
 
-    $newVersion = if (Test-Path $versionPath) { Get-Content $versionPath -Raw } else { "Unknown" }
-    Write-Host "Update completed! Version: $newVersion" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Update completed successfully!" -ForegroundColor Green
+    Write-Host "New Version: $latestVersion" -ForegroundColor Green
 
 } catch {
-    Write-Host "Error: $_" -ForegroundColor Red
+    Write-Host "Error occurred: $_" -ForegroundColor Red
     if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
 }
 
