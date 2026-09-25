@@ -129,16 +129,20 @@ jobs:
         $heliumDir = Get-ChildItem helium_extracted -Directory | Select-Object -First 1
         Copy-Item "$($heliumDir.FullName)\*" Helium_Portable\ -Recurse -Force
 
-        # Copy Chrome++ version.dll for the right architecture
-        $dll = Get-ChildItem -Recurse version.dll | Where-Object { $_.FullName -match "\\\\${arch}\\\\App\\\\" }
-        if ($dll) {
-          Copy-Item $dll[0].FullName Helium_Portable\ -Force
-          Write-Host "Chrome++ DLL: $($dll[0].FullName)"
-        } else {
-          Write-Host "WARNING: No version.dll found for $arch — trying x64 fallback"
-          $dll = Get-ChildItem -Recurse version.dll | Where-Object { $_.FullName -match '\\\\x64\\\\App\\\\' }
-          if ($dll) { Copy-Item $dll[0].FullName Helium_Portable\ -Force }
+        # Copy Chrome++ version.dll for the right architecture.
+        # Use -like (literal wildcard), NOT a backslash-counting regex: the
+        # previous regex demanded doubled backslashes that never occur in
+        # Windows paths, so version.dll was silently dropped from releases
+        # and portable data broke (issue #7).
+        $dll = Get-ChildItem -Recurse -Filter version.dll |
+          Where-Object { $_.FullName -like "*\${arch}\App\*" } |
+          Select-Object -First 1
+        if (-not $dll) {
+          Write-Error "version.dll for $arch not found in Chrome++ archive — aborting build (portable data would be broken)"
+          exit 1
         }
+        Copy-Item $dll.FullName Helium_Portable\ -Force
+        Write-Host "Chrome++ DLL: $($dll.FullName)"
 
         # Copy config files
         Copy-Item chrome++.ini,debloater.reg,default-apps-multi-profile.bat,update.bat Helium_Portable\ -Force
@@ -148,6 +152,13 @@ jobs:
 
         # Write version file
         Set-Content -Path "Helium_Portable\version.txt" -Value "$heliumVer"
+
+        # Safety net: never ship a zip without version.dll — portable data
+        # (chrome++.ini data_dir) only works when Chrome++ DLL is loaded.
+        if (-not (Test-Path "Helium_Portable\version.dll")) {
+          Write-Error "Helium_Portable\version.dll missing before packaging — aborting"
+          exit 1
+        }
 
         # Package
         Compress-Archive Helium_Portable "$tag.zip" -Force

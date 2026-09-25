@@ -117,6 +117,19 @@ jobs:
         grep -q "arm64" .github/workflows/main.yml && echo "  ARM64 support: OK" || echo "  WARNING: no ARM64"
         grep -q "debloater.reg" .github/workflows/main.yml && echo "  debloater.reg included: OK" || echo "  WARNING: debloater.reg missing from build"
 
+        # Portable-data safety net: build must hard-fail when version.dll is
+        # missing AND assert it exists before packaging (issue #7 regression).
+        if grep -qF '\\\\App\\\\' .github/workflows/main.yml; then
+          echo "  ERROR: broken quadruple-backslash DLL regex found (never matches Windows paths)"
+          exit 1
+        fi
+        echo "  Broken backslash regex: absent OK"
+
+        grep -q 'version\.dll' .github/workflows/main.yml || { echo "  ERROR: main.yml does not reference version.dll"; exit 1; }
+        grep -q 'Test-Path "Helium_Portable\\version\.dll"' .github/workflows/main.yml || { echo "  ERROR: missing pre-package version.dll assertion in main.yml"; exit 1; }
+        grep -q 'exit 1' .github/workflows/main.yml || { echo "  ERROR: main.yml has no hard-fail on missing version.dll"; exit 1; }
+        echo "  version.dll selection + assertion + hard-fail: OK"
+
     - name: Validate file structure
       run: |
         echo "==> Checking required files"
