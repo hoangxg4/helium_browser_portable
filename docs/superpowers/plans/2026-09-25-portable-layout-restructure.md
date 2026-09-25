@@ -434,7 +434,7 @@ grep -q 'BROWSER_ID=HeliumPortable' default-apps-multi-profile.bat && \
 grep -q 'ApplicationIcon' default-apps-multi-profile.bat && \
 grep -qF 'reg delete "HKLM\Software\RegisteredApplications" /v "%BROWSER_NAME%"' default-apps-multi-profile.bat && \
 grep -qF -- '--user-data-dir=\"%PROFILE_PATH%\"' default-apps-multi-profile.bat && \
-grep -q 'PROFILE_PATH=%app%..\Data' default-apps-multi-profile.bat && \
+grep -qF 'PROFILE_PATH=%app%..\Data' default-apps-multi-profile.bat && \
 ! grep -qF 'StartMenuInternet\%BROWSER_NAME%\DefaultIcon' default-apps-multi-profile.bat && \
 echo "GREEN: hibbiki registry model + deviations verified"
 ```
