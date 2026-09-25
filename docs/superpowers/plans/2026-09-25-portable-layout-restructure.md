@@ -730,7 +730,7 @@ for s in wf['jobs']['validate']['steps']:
     if 'run' not in s:
         continue
     name = s.get('name', '?')
-    r = subprocess.run(['bash', '-eo', 'pipefail', '-c', s['run']],
+    r = subprocess.run(['bash', '-e', '-c', s['run']],
                        capture_output=True, text=True)
     print(f"--- step '{name}': {'OK' if r.returncode == 0 else 'FAIL'}")
     print(r.stdout)
