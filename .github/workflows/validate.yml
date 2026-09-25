@@ -136,6 +136,7 @@ jobs:
         echo "==> Checking required files"
         REQUIRED=(
           "chrome++.ini"
+          "bypass_windows_defender.bat"
           "debloater.reg"
           "default-apps-multi-profile.bat"
           "update.bat"
