@@ -64,12 +64,13 @@ jobs:
         grep -q 'cache_dir=' chrome++.ini || { echo "  ERROR: missing cache_dir"; exit 1; }
         grep -q 'command_line=' chrome++.ini || { echo "  ERROR: missing command_line"; exit 1; }
 
-        # Check paths don't go outside (no ..\)
-        if grep '\.\.\\' chrome++.ini; then
-          echo "  WARNING: '..\' found in paths — data may be stored outside app dir"
-        else
-          echo "  Paths: OK (no ..\ references)"
-        fi
+        # hibbiki-style layout: %app% = Helium\, so ..\ escapes to the portable
+        # root where Data/Cache must live. This check used to reject '..\' —
+        # the restructure inverted the requirement (spec section 7).
+        grep -qF 'data_dir=%app%\..\Data' chrome++.ini || { echo "  ERROR: data_dir must be %app%\..\Data"; exit 1; }
+        grep -qF 'cache_dir=%app%\..\Cache' chrome++.ini || { echo "  ERROR: cache_dir must be %app%\..\Cache"; exit 1; }
+        grep -qF 'policy_key=Portable' chrome++.ini || { echo "  ERROR: missing policy_key=Portable"; exit 1; }
+        echo "  Paths: OK (data/cache at portable root)"
 
         echo "  command_line: $(grep 'command_line=' chrome++.ini | sed 's/command_line=//')"
 
