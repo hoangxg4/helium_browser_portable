@@ -123,11 +123,12 @@ jobs:
         Expand-Archive -Path helium.zip -DestinationPath helium_extracted -Force
         ./7zr.exe x chrome_plus.7z -y
 
-        New-Item -Force -Type Directory Helium_Portable | Out-Null
+        # hibbiki-style layout: everything fixed lives under Helium_Portable\Helium\
+        New-Item -Force -Type Directory Helium_Portable\Helium | Out-Null
 
         # Copy Helium files
         $heliumDir = Get-ChildItem helium_extracted -Directory | Select-Object -First 1
-        Copy-Item "$($heliumDir.FullName)\*" Helium_Portable\ -Recurse -Force
+        Copy-Item "$($heliumDir.FullName)\*" Helium_Portable\Helium\ -Recurse -Force
 
         # Copy Chrome++ version.dll for the right architecture.
         # Use -like (literal wildcard), NOT a backslash-counting regex: the
@@ -141,22 +142,30 @@ jobs:
           Write-Error "version.dll for $arch not found in Chrome++ archive — aborting build (portable data would be broken)"
           exit 1
         }
-        Copy-Item $dll.FullName Helium_Portable\ -Force
+        Copy-Item $dll.FullName Helium_Portable\Helium\ -Force
         Write-Host "Chrome++ DLL: $($dll.FullName)"
 
         # Copy config files
-        Copy-Item chrome++.ini,debloater.reg,default-apps-multi-profile.bat,update.bat Helium_Portable\ -Force
+        Copy-Item chrome++.ini,debloater.reg,default-apps-multi-profile.bat,update.bat,bypass_windows_defender.bat Helium_Portable\Helium\ -Force
 
         # Copy WidevineCdm
-        Copy-Item WidevineCdm Helium_Portable\ -Recurse -Force
+        Copy-Item WidevineCdm "Helium_Portable\Helium\$heliumVer\" -Recurse -Force
 
         # Write version file
-        Set-Content -Path "Helium_Portable\version.txt" -Value "$heliumVer"
+        Set-Content -Path "Helium_Portable\Helium\version.txt" -Value "$heliumVer"
 
         # Safety net: never ship a zip without version.dll — portable data
         # (chrome++.ini data_dir) only works when Chrome++ DLL is loaded.
-        if (-not (Test-Path "Helium_Portable\version.dll")) {
-          Write-Error "Helium_Portable\version.dll missing before packaging — aborting"
+        if (-not (Test-Path "Helium_Portable\Helium\version.dll")) {
+          Write-Error "Helium_Portable\Helium\version.dll missing before packaging — aborting"
+          exit 1
+        }
+        if (-not (Test-Path "Helium_Portable\Helium\chrome.exe")) {
+          Write-Error "Helium_Portable\Helium\chrome.exe missing before packaging — aborting"
+          exit 1
+        }
+        if (-not (Test-Path "Helium_Portable\Helium\$heliumVer\WidevineCdm\manifest.json")) {
+          Write-Error "WidevineCdm not nested at Helium\$heliumVer\WidevineCdm — aborting"
           exit 1
         }
 

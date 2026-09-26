@@ -127,9 +127,15 @@ jobs:
         echo "  Broken backslash regex: absent OK"
 
         grep -q 'version\.dll' .github/workflows/main.yml || { echo "  ERROR: main.yml does not reference version.dll"; exit 1; }
-        grep -q 'Test-Path "Helium_Portable\\version\.dll"' .github/workflows/main.yml || { echo "  ERROR: missing pre-package version.dll assertion in main.yml"; exit 1; }
+        grep -q 'Test-Path "Helium_Portable\\Helium\\version\.dll"' .github/workflows/main.yml || { echo "  ERROR: missing pre-package version.dll assertion in main.yml"; exit 1; }
         grep -q 'exit 1' .github/workflows/main.yml || { echo "  ERROR: main.yml has no hard-fail on missing version.dll"; exit 1; }
         echo "  version.dll selection + assertion + hard-fail: OK"
+
+        # hibbiki-style layout: assembly must target Helium_Portable\Helium\
+        # and nest WidevineCdm under the Helium version dir (spec sections 2, 7).
+        grep -qF 'Helium_Portable\Helium' .github/workflows/main.yml || { echo "  ERROR: main.yml does not assemble into Helium_Portable\Helium"; exit 1; }
+        grep -qF '$heliumVer\WidevineCdm' .github/workflows/main.yml || { echo "  ERROR: WidevineCdm not nested under the version dir"; exit 1; }
+        echo "  hibbiki layout assembly: OK"
 
     - name: Validate file structure
       run: |
