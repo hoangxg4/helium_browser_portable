@@ -149,6 +149,7 @@ jobs:
         Copy-Item chrome++.ini,debloater.reg,default-apps-multi-profile.bat,update.bat,bypass_windows_defender.bat Helium_Portable\Helium\ -Force
 
         # Copy WidevineCdm
+        New-Item -Force -Type Directory "Helium_Portable\Helium\$heliumVer" | Out-Null
         Copy-Item WidevineCdm "Helium_Portable\Helium\$heliumVer\" -Recurse -Force
 
         # Write version file
