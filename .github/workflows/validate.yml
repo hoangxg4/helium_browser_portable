@@ -69,6 +69,10 @@ jobs:
         # the restructure inverted the requirement (spec section 7).
         grep -qF 'data_dir=%app%\..\Data' chrome++.ini || { echo "  ERROR: data_dir must be %app%\..\Data"; exit 1; }
         grep -qF 'cache_dir=%app%\..\Cache' chrome++.ini || { echo "  ERROR: cache_dir must be %app%\..\Cache"; exit 1; }
+        if grep -qF 'data_dir=%app%\Data' chrome++.ini; then
+          echo "  ERROR: old flat data_dir=%app%\Data present"
+          exit 1
+        fi
         grep -qF 'policy_key=Portable' chrome++.ini || { echo "  ERROR: missing policy_key=Portable"; exit 1; }
         echo "  Paths: OK (data/cache at portable root)"
 
