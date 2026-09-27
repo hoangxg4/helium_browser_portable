@@ -3,6 +3,12 @@
 Date: 2026-09-26
 Status: approved by operator (design decisions recorded inline); pending spec review
 
+**Execution status (2026-09-27):** Operator answered "Không xóa" — phase-3
+deletion of the 73 per-arch releases was **DECLINED**. Final state is
+**coexistence: 127 releases = 73 old per-arch retained + 54 unified**;
+phase 3 must NOT run without a new explicit operator request. The notes at
+decision 2, Phase 3, and §7 are retained as historical but superseded.
+
 ## 1. Discovery
 
 ### Original request
@@ -37,6 +43,7 @@ one arch the other release is not updated — the two arches are not unified.
    keeping two releases with sync guarantees).
 2. **Migrate the full history**: create unified releases for all 54 combos,
    then delete the 73 per-arch releases (historical URLs may change).
+   *[Superseded 2026-09-27: deletion declined, the 73 per-arch releases are retained — see Execution status.]*
 3. **Approach 1 — artifact bridge**: matrix jobs build and upload artifacts; a
    single final `release` job publishes both zips to one tag (chosen over
    concurrent same-tag publishing and over a single sequential build job).
@@ -162,6 +169,8 @@ Re-query the API and require **all** of:
 
 ### Phase 3 — delete (gated on operator approval)
 
+*[Superseded 2026-09-27 — retained as historical procedure; do NOT run without a new explicit operator request. See Execution status.]*
+
 Only after phase 2 is green and the operator approves:
 
 1. Delete the 73 per-arch releases (`gh release delete --yes`).
@@ -205,6 +214,7 @@ layout for pre-restructure versions). Rebuilding history is a non-goal.
 - **Destructive phase** (deleting 73 releases + tags) is gated on explicit
   approval after verification; phase separation prevents partial rollouts.
 - Hotlinked/old release URLs break after phase 3 — accepted by the operator.
+  *[Superseded 2026-09-27: phase 3 declined; URLs remain stable — retained as historical.]*
 - softprops `overwrite: true` replaces same-name assets only; asset names
   differ per arch, so no accidental cross-arch overwrite is possible.
 - Concurrent hourly cron vs. manual dispatch racing the release job: both
