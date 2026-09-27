@@ -1,0 +1,223 @@
+name: "Windows Smoke (issue #5 update flow + Widevine)"
+
+# Purpose: verify issue #5 (update.bat does not update WidevineCdm) on a real
+# Windows runner without manual testing, and answer the layout spec's open risk
+# "versioned Widevine path not honored by Helium".
+#
+# Phase A (fresh install): download the newest unified release zip, assert the
+# portable layout (versioned Widevine, version.dll), then launch Helium headless
+# with an EME probe page (navigator.requestMediaKeySystemAccess for
+# com.widevine.alpha). Hard-fails if the CDM does not resolve on a fresh zip.
+#
+# Phase B (update flow): simulate an older install (version marker 0.0.0.0),
+# run the real update.bat end-to-end (stdin-fed), then check: version bump,
+# protected files unchanged, whether Helium/<upstream-version>/WidevineCdm was
+# created, and re-run the EME probe. If the CDM stops resolving, the #5 gap is
+# CONFIRMED (workflow fails and the summary says so); if it still resolves,
+# #5 is NOT REPRODUCIBLE (workflow passes with evidence to close the issue).
+# Fallback probe: flat Helium/WidevineCdm is copied in only when Phase B's EME
+# fails, to validate the documented flat-fallback contingency.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SMOKE: ${{ runner.temp }}/smoke
+      PROBE_B64: PCFkb2N0eXBlIGh0bWw+PG1ldGEgY2hhcnNldD11dGYtOD48dGl0bGU+cHJvYmU8L3RpdGxlPjxwcmUgaWQ9bz5wZW5kaW5nPC9wcmU+CjxzY3JpcHQ+CmNvbnN0IG89ZG9jdW1lbnQuZ2V0RWxlbWVudEJ5SWQoJ28nKTsKdHJ5ewpuYXZpZ2F0b3IucmVxdWVzdE1lZGlhS2V5U3lzdGVtQWNjZXNzKCdjb20ud2lkZXZpbmUuYWxwaGEnLFt7CiAgdmlkZW9DYXBhYmlsaXRpZXM6W3tjb250ZW50VHlwZTondmlkZW8vbXA0OyBjb2RlY3M9ImF2YzEuNDJFMDFFIid9XSwKICBhdWRpb0NhcGFiaWxpdGllczpbe2NvbnRlbnRUeXBlOidhdWRpby9tcDQ7IGNvZGVjcz0ibXA0YS40MC4yIid9XQp9XSkudGhlbihmdW5jdGlvbigpe28udGV4dENvbnRlbnQ9J0NETV9PSyc7ZG9jdW1lbnQudGl0bGU9J0NETV9PSyc7fSkKLmNhdGNoKGZ1bmN0aW9uKGUpe28udGV4dENvbnRlbnQ9J0NETV9GQUlMOicrZS5uYW1lKyc6JytlLm1lc3NhZ2U7ZG9jdW1lbnQudGl0bGU9J0NETV9GQUlMJzt9KTsKfWNhdGNoKGUpe28udGV4dENvbnRlbnQ9J0NETV9USFJPVzonK2UubmFtZTtkb2N1bWVudC50aXRsZT0nQ0RNX1RIUk9XJzt9Cjwvc2NyaXB0Pgo=
+
+    steps:
+      - name: Resolve latest unified release
+        id: rel
+        run: |
+          $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = "application/vnd.github+json" }
+          $r = Invoke-RestMethod -Headers $h "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/latest"
+          if ($r.tag_name -notmatch '^helium-portable_\d') { throw "latest release is not a unified tag: $($r.tag_name)" }
+          $asset = $r.assets | Where-Object { $_.name -match '^helium-portable-x64_.*\.zip$' } | Select-Object -First 1
+          if (-not $asset) { throw "no x64 zip asset on $($r.tag_name)" }
+          $ver = ($r.tag_name -replace '^helium-portable_', '').Split('_')[0]
+          @{
+            tag = $r.tag_name
+            ver = $ver
+            url = $asset.browser_download_url
+          }.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8 }
+          New-Item -ItemType Directory -Force $env:SMOKE | Out-Null
+          "Baseline release: $($r.tag_name) (Helium $ver)" | Set-Content -Encoding utf8 "$env:SMOKE/summary.md"
+
+      - name: Prepare EME probe page + helper
+        run: |
+          [IO.File]::WriteAllBytes("$env:SMOKE/probe.html", [Convert]::FromBase64String($env:PROBE_B64))
+          $helper = @'
+          param([string]$App, [string]$Profile, [string]$Log, [string]$Probe)
+          $exe = Join-Path $App 'chrome.exe'
+          $uri = 'file:///' + ($Probe -replace '\\', '/')
+          $dom = & $exe --headless=new --disable-gpu --no-first-run --no-default-browser-check `
+            --disable-crash-reporter --user-data-dir="$Profile" --enable-logging=stderr --v=1 `
+            --virtual-time-budget=12000 --dump-dom "$uri" 2>&1 | Out-String
+          Set-Content -Encoding utf8 $Log $dom
+          Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
+          if ($dom -match 'CDM_OK') { return 'CDM_OK' }
+          if ($dom -match 'CDM_FAIL:[^<]+') { return $Matches[0] }
+          if ($dom -match 'CDM_THROW:\w+') { return $Matches[0] }
+          return 'NO_RESULT'
+          '@
+          Set-Content -Encoding utf8 "$env:SMOKE/run-probe.ps1" $helper
+          if (-not ((Get-Content "$env:SMOKE/probe.html" -Raw) -match 'requestMediaKeySystemAccess')) { throw "probe.html decode failed" }
+          "Probe prepared." | Add-Content "$env:SMOKE/summary.md"
+
+      - name: Phase A — download, layout asserts, EME probe (fresh install)
+        id: phaseA
+        run: |
+          $fail = [System.Collections.Generic.List[string]]::new()
+          function Assert([bool]$cond, [string]$msg) {
+            if ($cond) { "PASS: $msg" | Add-Content "$env:SMOKE/summary.md" }
+            else { "FAIL: $msg" | Add-Content "$env:SMOKE/summary.md"; $script:fail.Add($msg) }
+          }
+          Invoke-WebRequest -Uri '${{ steps.rel.outputs.url }}' -OutFile "$env:SMOKE/rel.zip"
+          Expand-Archive -Path "$env:SMOKE/rel.zip" -DestinationPath "$env:SMOKE/fresh" -Force
+          $app = "$env:SMOKE/fresh/Helium_Portable/Helium"
+          $ver = '${{ steps.rel.outputs.ver }}'
+
+          Assert (Test-Path "$app/chrome.exe") "fresh: chrome.exe present"
+          Assert (Test-Path "$app/version.dll") "fresh: version.dll present (issue #7)"
+          Assert ((Get-Content "$app/version.txt" -Raw).Trim() -eq $ver) "fresh: version.txt == $ver"
+          Assert (Test-Path "$app/$ver/WidevineCdm/manifest.json") "fresh: versioned WidevineCdm present (layout)"
+          Assert (-not (Test-Path "$app/WidevineCdm")) "fresh: no flat WidevineCdm (layout)"
+
+          $eme = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileA" -Log "$env:SMOKE/emeA.log" -Probe "$env:SMOKE/probe.html"
+          "emeA=$eme" | Set-Content "$env:SMOKE/emeA.txt"
+          "Phase A EME: $eme" | Add-Content "$env:SMOKE/summary.md"
+
+          if ($fail.Count -gt 0) {
+            throw "Phase A failed: $($fail -join '; ')"
+          }
+
+      - name: Phase B — simulate old install + run real update.bat
+        id: phaseB
+        run: |
+          $fail = [System.Collections.Generic.List[string]]::new()
+          function Assert([bool]$cond, [string]$msg) {
+            if ($cond) { "PASS: $msg" | Add-Content "$env:SMOKE/summary.md" }
+            else { "FAIL: $msg" | Add-Content "$env:SMOKE/summary.md"; $script:fail.Add($msg) }
+          }
+          $app = "$env:SMOKE/fresh/Helium_Portable/Helium"
+          $ver = '${{ steps.rel.outputs.ver }}'
+
+          # Simulate an older install: rename the versioned CDM dir + marker.
+          Move-Item "$app/$ver" "$app/0.0.0.0"
+          Set-Content "$app/version.txt" "0.0.0.0"
+          $protected = 'chrome++.ini','update.bat','debloater.reg','default-apps-multi-profile.bat','bypass_windows_defender.bat'
+          foreach ($f in $protected) { (Get-FileHash "$app/$f").Hash + ' ' + $f | Add-Content "$env:SMOKE/hashes-before.txt" }
+
+          "" | Add-Content "$env:SMOKE/summary.md"
+          "## Update flow (version.txt forced to 0.0.0.0)" | Add-Content "$env:SMOKE/summary.md"
+
+          # Upstream latest, for post-update expectations.
+          $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = "application/vnd.github+json" }
+          $up = Invoke-RestMethod -Headers $h "https://api.github.com/repos/imputnet/helium-windows/releases?per_page=10"
+          $expected = ($up | Where-Object { -not $_.prerelease } | Select-Object -First 1).tag_name
+          "Upstream latest: $expected" | Add-Content "$env:SMOKE/summary.md"
+          $expected | Set-Content "$env:SMOKE/expected.txt"
+
+          # Run the real update.bat; stdin feeds both Read-Host prompts.
+          $bat = "$app/update.bat"
+          if (-not (Test-Path $bat)) { throw "update.bat missing from zip" }
+          "Running update.bat (piped 'y')..." | Add-Content "$env:SMOKE/summary.md"
+          $batDir = $app
+          Push-Location $batDir
+          try {
+            $p = Start-Process -FilePath "$env:ComSpec" -ArgumentList '/c','echo y| update.bat' -WorkingDirectory $batDir -Wait -PassThru -NoNewWindow
+            "update.bat exit code: $($p.ExitCode)" | Add-Content "$env:SMOKE/summary.md"
+          } finally { Pop-Location }
+
+          # Post-update asserts.
+          $newV = (Get-Content "$app/version.txt" -Raw).Trim()
+          Assert ($newV -eq $expected) "update: version.txt bumped to upstream latest ($newV == $expected)"
+          $protectedOk = $true
+          foreach ($line in (Get-Content "$env:SMOKE/hashes-before.txt")) {
+            $parts = $line -split ' ', 2
+            if ((Get-FileHash "$app/$($parts[1])").Hash -ne $parts[0]) {
+              $protectedOk = $false
+              "FAIL: protected file changed: $($parts[1])" | Add-Content "$env:SMOKE/summary.md"
+              $fail.Add("protected changed: $($parts[1])")
+            }
+          }
+          Assert $protectedOk "update: protected files unchanged (ini/bats)"
+          Assert (Test-Path "$app/chrome.exe") "update: chrome.exe still present"
+
+          $newCdm = Test-Path "$app/$newV/WidevineCdm/manifest.json"
+          $oldCdm = Test-Path "$app/0.0.0.0/WidevineCdm/manifest.json"
+          $line = if ($newCdm) { "YES" } else { "NO — upstream zip ships no WidevineCdm, update.bat does not carry it over (expected #5 gap)" }
+          "update: Helium/$newV/WidevineCdm created by update.bat: $line" | Add-Content "$env:SMOKE/summary.md"
+          Assert $oldCdm "update: old versioned CDM dir preserved (not deleted)"
+
+          # EME probe after the update.
+          $eme = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileB" -Log "$env:SMOKE/emeB.log" -Probe "$env:SMOKE/probe.html"
+          "emeB=$eme" | Set-Content "$env:SMOKE/emeB.txt"
+          "Phase B EME: $eme" | Add-Content "$env:SMOKE/summary.md"
+
+          # Contingency: flat fallback (spec's documented mitigation) — only if B failed.
+          if ($eme -ne 'CDM_OK' -and (Test-Path "$app/0.0.0.0/WidevineCdm")) {
+            Copy-Item "$app/0.0.0.0/WidevineCdm" "$app/WidevineCdm" -Recurse -Force
+            "Flat fallback: copied 0.0.0.0/WidevineCdm -> Helium/WidevineCdm, re-probing..." | Add-Content "$env:SMOKE/summary.md"
+            $eme3 = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileC" -Log "$env:SMOKE/emeC.log" -Probe "$env:SMOKE/probe.html"
+            "emeC=$eme3" | Set-Content "$env:SMOKE/emeC.txt"
+            "Flat fallback EME: $eme3" | Add-Content "$env:SMOKE/summary.md"
+          }
+
+          if ($fail.Count -gt 0) { throw "Phase B failed: $($fail -join '; ')" }
+
+      - name: "Verdict — issue #5 resolved or confirmed"
+        if: always()
+        run: |
+          $summary = "$env:SMOKE/summary.md"
+          $emeA = if (Test-Path "$env:SMOKE/emeA.txt") { (Get-Content "$env:SMOKE/emeA.txt" -Raw).Trim() } else { 'MISSING' }
+          $emeB = if (Test-Path "$env:SMOKE/emeB.txt") { (Get-Content "$env:SMOKE/emeB.txt" -Raw).Trim() } else { 'MISSING' }
+          $emeC = if (Test-Path "$env:SMOKE/emeC.txt") { (Get-Content "$env:SMOKE/emeC.txt" -Raw).Trim() } else { '' }
+          $fails = @()
+
+          "" | Add-Content $summary
+          "## EME probes" | Add-Content $summary
+          "- fresh install: \`$emeA\`" | Add-Content $summary
+          "- after update.bat: \`$emeB\`" | Add-Content $summary
+          if ($emeC) { "- flat fallback: \`$emeC\`" | Add-Content $summary }
+
+          if ($emeA -ne 'CDM_OK') {
+            $fails += "fresh-install EME is '$emeA' (CDM did not resolve on a fresh zip — layout or headless-environment issue; see log lines below)"
+            "" | Add-Content $summary
+            "CDM-related log lines (fresh):" | Add-Content $summary
+            if (Test-Path "$env:SMOKE/emeA.log") {
+              Select-String -Path "$env:SMOKE/emeA.log" -Pattern 'widevine|cdm' -CaseSensitive:$false |
+                Select-Object -First 15 | ForEach-Object { "- ``$($_.Line.Trim())``" } | Add-Content $summary
+            }
+          }
+
+          "" | Add-Content $summary
+          "## Verdict" | Add-Content $summary
+          if ($emeA -eq 'CDM_OK' -and $emeB -eq 'CDM_OK') {
+            "**#5 NOT REPRODUCIBLE** — after a real update.bat version bump the CDM still resolves. Evidence to close #5." | Add-Content $summary
+          } elseif ($emeA -eq 'CDM_OK' -and $emeB -ne 'CDM_OK') {
+            $fails += "#5 CONFIRMED — fresh install resolves the CDM but after update.bat it is '$emeB'; versioned dir was not recreated"
+            "**#5 CONFIRMED** — fresh install resolves the CDM, post-update does not (\`$emeB\`)." | Add-Content $summary
+            if ($emeC) { "Flat fallback result: \`$emeC\` (mitigation direction for the fix)." | Add-Content $summary }
+          } else {
+            $fails += "inconclusive: fresh probe '$emeA' never reached CDM_OK"
+            "**INCONCLUSIVE** — fresh probe never reached CDM_OK; tune the probe before trusting the verdict." | Add-Content $summary
+          }
+
+          "" | Add-Content $summary
+          if ($fails.Count -gt 0) { "**Result: FAILED**" | Add-Content $summary }
+          else { "**Result: PASSED**" | Add-Content $summary }
+
+          Get-Content $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          if ($fails.Count -gt 0) { exit 1 }
