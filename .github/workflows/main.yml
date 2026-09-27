@@ -139,9 +139,12 @@ jobs:
         # Copy config files
         Copy-Item chrome++.ini,debloater.reg,default-apps-multi-profile.bat,update.bat,bypass_windows_defender.bat Helium_Portable\Helium\ -Force
 
-        # Copy WidevineCdm
-        New-Item -Force -Type Directory "Helium_Portable\Helium\$heliumVer" | Out-Null
-        Copy-Item WidevineCdm "Helium_Portable\Helium\$heliumVer\" -Recurse -Force
+        # Copy WidevineCdm — FLAT at Helium\WidevineCdm (next to chrome.exe).
+        # Chrome 154/Helium only registers the preinstalled CDM from the exe-dir
+        # flat path; the old versioned Helium\<ver>\WidevineCdm nesting is
+        # ignored entirely (verified empirically by windows-smoke run
+        # 36306584637: flat=CDM_OK, versioned=CDM_FAIL, chrome-ver=CDM_FAIL).
+        Copy-Item WidevineCdm "Helium_Portable\Helium\" -Recurse -Force
 
         # Write version file
         Set-Content -Path "Helium_Portable\Helium\version.txt" -Value "$heliumVer"
@@ -156,8 +159,8 @@ jobs:
           Write-Error "Helium_Portable\Helium\chrome.exe missing before packaging — aborting"
           exit 1
         }
-        if (-not (Test-Path "Helium_Portable\Helium\$heliumVer\WidevineCdm\manifest.json")) {
-          Write-Error "WidevineCdm not nested at Helium\$heliumVer\WidevineCdm — aborting"
+        if (-not (Test-Path "Helium_Portable\Helium\WidevineCdm\manifest.json")) {
+          Write-Error "WidevineCdm missing at flat Helium\WidevineCdm — aborting (Chrome would not register a versioned path)"
           exit 1
         }
 

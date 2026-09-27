@@ -99,6 +99,24 @@ try {
         }
     }
 
+    # Migration (issue #5 / flat-layout fix): Chrome only registers the FLAT
+    # Helium\WidevineCdm path — the old Helium\<version>\WidevineCdm nesting is
+    # ignored (verified: windows-smoke run 36306584637, flat=CDM_OK). Move a
+    # nested CDM to the flat path so DRM keeps working on pre-fix installs.
+    $flatCdm = Join-Path $appDir "WidevineCdm"
+    if (-not (Test-Path (Join-Path $flatCdm "manifest.json"))) {
+        $nested = Get-ChildItem $appDir -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+' -and (Test-Path (Join-Path $_.FullName "WidevineCdm")) } |
+            Select-Object -First 1
+        if ($nested) {
+            Write-Host "  Migrating versioned WidevineCdm to flat layout..." -ForegroundColor Yellow
+            Move-Item (Join-Path $nested.FullName "WidevineCdm") $flatCdm -Force
+            if (-not (Get-ChildItem $nested.FullName -Force -ErrorAction SilentlyContinue)) {
+                Remove-Item $nested.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
     # BƯỚC QUAN TRỌNG: Ghi đè file version để không bị kẹt ở phiên bản cũ
     Set-Content -Path $versionPath -Value $latestVersion -Force
     try { Remove-Item $tempDir -Recurse -Force -ErrorAction Stop } catch {}

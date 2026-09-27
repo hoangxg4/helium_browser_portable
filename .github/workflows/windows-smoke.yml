@@ -1,22 +1,25 @@
 name: "Windows Smoke (issue #5 update flow + Widevine)"
 
 # Purpose: verify issue #5 (update.bat does not update WidevineCdm) on a real
-# Windows runner without manual testing, and answer the layout spec's open risk
-# "versioned Widevine path not honored by Helium".
+# Windows runner without manual testing. History: run 36306584637 proved that
+# Chrome 154 only registers the FLAT Helium\WidevineCdm path (versioned and
+# chrome-ver dirs both fail), so the build now ships flat and update.bat
+# migrates legacy nested installs.
 #
 # Phase A (fresh install): download the newest unified release zip, assert the
-# portable layout (versioned Widevine, version.dll), then launch Helium headless
-# with an EME probe page (navigator.requestMediaKeySystemAccess for
-# com.widevine.alpha). Hard-fails if the CDM does not resolve on a fresh zip.
+# portable layout (FLAT WidevineCdm next to chrome.exe, version.dll), then
+# launch Helium headless with an EME probe page
+# (navigator.requestMediaKeySystemAccess for com.widevine.alpha). Hard-fails
+# if the CDM does not resolve on a fresh zip. If it does not, a path matrix
+# (versioned dir, chrome internal dir) runs to separate a layout regression
+# from an environment limitation.
 #
-# Phase B (update flow): simulate an older install (version marker 0.0.0.0),
-# run the real update.bat end-to-end (stdin-fed), then check: version bump,
-# protected files unchanged, whether Helium/<upstream-version>/WidevineCdm was
-# created, and re-run the EME probe. If the CDM stops resolving, the #5 gap is
-# CONFIRMED (workflow fails and the summary says so); if it still resolves,
-# #5 is NOT REPRODUCIBLE (workflow passes with evidence to close the issue).
-# Fallback probe: flat Helium/WidevineCdm is copied in only when Phase B's EME
-# fails, to validate the documented flat-fallback contingency.
+# Phase B (update flow): simulate a PRE-FIX install (version marker 0.0.0.0,
+# CDM nested under a versioned dir, no flat CDM), run the real update.bat
+# end-to-end (stdin-fed), then check: version bump, protected files unchanged,
+# update.bat migrated the nested CDM to the flat path, and re-run the EME
+# probe. Green end-to-end = evidence to close #5; any loss of the CDM = #5
+# CONFIRMED (workflow fails and the summary says so).
 
 on:
   workflow_dispatch:
@@ -140,8 +143,8 @@ jobs:
           Assert (Test-Path "$app/chrome.exe") "fresh: chrome.exe present"
           Assert (Test-Path "$app/version.dll") "fresh: version.dll present (issue #7)"
           Assert ((Get-Content "$app/version.txt" -Raw).Trim() -eq $ver) "fresh: version.txt == $ver"
-          Assert (Test-Path "$app/$ver/WidevineCdm/manifest.json") "fresh: versioned WidevineCdm present (layout)"
-          Assert (-not (Test-Path "$app/WidevineCdm")) "fresh: no flat WidevineCdm (layout)"
+          Assert (Test-Path "$app/WidevineCdm/manifest.json") "fresh: flat WidevineCdm present (layout)"
+          Assert (-not (Test-Path "$app/$ver/WidevineCdm")) "fresh: no versioned WidevineCdm (layout — Chrome ignores it)"
           "chrome.exe ProductVersion: $((Get-Item "$app/chrome.exe").VersionInfo.ProductVersion); size=$((Get-Item "$app/chrome.exe").Length)" | Add-Content "$env:SMOKE/summary.md"
           # Chrome++ version.dll (issue #7 artifact) hijacks app-local version.dll and
           # suppresses --dump-dom output entirely on CI (verified: exit=0, 0 bytes with
@@ -152,28 +155,30 @@ jobs:
 
           $eme = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileA" -Log "$env:SMOKE/emeA.log" -Probe "$env:SMOKE/probe.html" -Label "A-fresh"
           "emeA=$eme" | Set-Content "$env:SMOKE/emeA.txt"
-          "Phase A EME (shipped layout, Helium/$ver dir): $eme" | Add-Content "$env:SMOKE/summary.md"
+          "Phase A EME (shipped layout, flat Helium\WidevineCdm): $eme" | Add-Content "$env:SMOKE/summary.md"
 
-          # If the shipped layout does not resolve the CDM, test alternate locations
-          # to separate "wrong versioned path" from "headless cannot do Widevine".
+          # If the shipped flat layout does not resolve the CDM, probe alternate
+          # locations to separate a layout regression from "CI cannot do Widevine".
           if ($eme -notmatch 'eme=CDM_OK') {
             $chromeVer = (Get-Item "$app/chrome.exe").VersionInfo.ProductVersion
             "" | Add-Content "$env:SMOKE/summary.md"
-            "## CDM path matrix (shipped path failed)" | Add-Content "$env:SMOKE/summary.md"
-            # P1: chrome's own internal version directory (Application\<chromeVer>\WidevineCdm).
-            New-Item -ItemType Directory -Force "$app/$chromeVer" | Out-Null
-            Move-Item "$app/$ver/WidevineCdm" "$app/$chromeVer/WidevineCdm" -Force
-            $eme1 = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileP1" -Log "$env:SMOKE/emeP1.log" -Probe "$env:SMOKE/probe.html" -Label "P1-chromever"
-            "emeP1=$eme1" | Set-Content "$env:SMOKE/emeP1.txt"
-            "P1 (chrome internal dir $chromeVer): $eme1" | Add-Content "$env:SMOKE/summary.md"
-            Move-Item "$app/$chromeVer/WidevineCdm" "$app/$ver/WidevineCdm" -Force
-            Remove-Item "$app/$chromeVer" -Recurse -Force
-            # P2: flat legacy location (spec's documented contingency).
-            Move-Item "$app/$ver/WidevineCdm" "$app/WidevineCdm" -Force
-            $eme2 = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileP2" -Log "$env:SMOKE/emeP2.log" -Probe "$env:SMOKE/probe.html" -Label "P2-flat"
-            "emeP2=$eme2" | Set-Content "$env:SMOKE/emeP2.txt"
-            "P2 (flat Helium/WidevineCdm): $eme2" | Add-Content "$env:SMOKE/summary.md"
+            "## CDM path matrix (flat shipped path failed)" | Add-Content "$env:SMOKE/summary.md"
+            # P1: legacy versioned dir (pre-fix layout).
+            New-Item -ItemType Directory -Force "$app/$ver" | Out-Null
             Move-Item "$app/WidevineCdm" "$app/$ver/WidevineCdm" -Force
+            $eme1 = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileP1" -Log "$env:SMOKE/emeP1.log" -Probe "$env:SMOKE/probe.html" -Label "P1-versioned"
+            "emeP1=$eme1" | Set-Content "$env:SMOKE/emeP1.txt"
+            "P1 (versioned Helium/$ver): $eme1" | Add-Content "$env:SMOKE/summary.md"
+            Move-Item "$app/$ver/WidevineCdm" "$app/WidevineCdm" -Force
+            Remove-Item "$app/$ver" -Recurse -Force
+            # P2: chrome's own internal version directory (Application\<chromeVer>\WidevineCdm).
+            New-Item -ItemType Directory -Force "$app/$chromeVer" | Out-Null
+            Move-Item "$app/WidevineCdm" "$app/$chromeVer/WidevineCdm" -Force
+            $eme2 = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileP2" -Log "$env:SMOKE/emeP2.log" -Probe "$env:SMOKE/probe.html" -Label "P2-chromever"
+            "emeP2=$eme2" | Set-Content "$env:SMOKE/emeP2.txt"
+            "P2 (chrome internal dir $chromeVer): $eme2" | Add-Content "$env:SMOKE/summary.md"
+            Move-Item "$app/$chromeVer/WidevineCdm" "$app/WidevineCdm" -Force
+            Remove-Item "$app/$chromeVer" -Recurse -Force
           }
 
           if ($fail.Count -gt 0) {
@@ -191,9 +196,13 @@ jobs:
           $app = "$env:SMOKE/fresh/Helium_Portable/Helium"
           $ver = '${{ steps.rel.outputs.ver }}'
 
-          # Simulate an older install: rename the versioned CDM dir + marker.
-          Move-Item "$app/$ver" "$app/0.0.0.0"
+          # Simulate a PRE-FIX install: version marker old + CDM nested under a
+          # versioned dir + no flat CDM — exactly what unified releases shipped
+          # before the flat-layout fix. update.bat must migrate it to flat.
           Set-Content "$app/version.txt" "0.0.0.0"
+          New-Item -ItemType Directory -Force "$app/0.0.0.0" | Out-Null
+          Move-Item "$app/WidevineCdm" "$app/0.0.0.0/WidevineCdm" -Force
+          Assert (-not (Test-Path "$app/WidevineCdm")) "pre-update: flat CDM absent (old-install simulation)"
           $protected = 'chrome++.ini','update.bat','debloater.reg','default-apps-multi-profile.bat','bypass_windows_defender.bat'
           foreach ($f in $protected) { (Get-FileHash "$app/$f").Hash + ' ' + $f | Add-Content "$env:SMOKE/hashes-before.txt" }
 
@@ -233,25 +242,13 @@ jobs:
           Assert $protectedOk "update: protected files unchanged (ini/bats)"
           Assert (Test-Path "$app/chrome.exe") "update: chrome.exe still present"
 
-          $newCdm = Test-Path "$app/$newV/WidevineCdm/manifest.json"
-          $oldCdm = Test-Path "$app/0.0.0.0/WidevineCdm/manifest.json"
-          $line = if ($newCdm) { "YES" } else { "NO — upstream zip ships no WidevineCdm, update.bat does not carry it over (expected #5 gap)" }
-          "update: Helium/$newV/WidevineCdm created by update.bat: $line" | Add-Content "$env:SMOKE/summary.md"
-          Assert $oldCdm "update: old versioned CDM dir preserved (not deleted)"
+          Assert (Test-Path "$app/WidevineCdm/manifest.json") "update: nested CDM migrated to flat Helium\WidevineCdm by update.bat"
+          Assert (-not (Test-Path "$app/0.0.0.0/WidevineCdm")) "update: versioned CDM dir removed after migration"
 
-          # EME probe after the update.
+          # EME probe after the update (flat CDM must be in place via migration).
           $eme = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileB" -Log "$env:SMOKE/emeB.log" -Probe "$env:SMOKE/probe.html" -Label "B-postupdate"
           "emeB=$eme" | Set-Content "$env:SMOKE/emeB.txt"
           "Phase B EME: $eme" | Add-Content "$env:SMOKE/summary.md"
-
-          # Contingency: flat fallback (spec's documented mitigation) — only if B's EME failed.
-          if ($eme -notmatch 'eme=CDM_OK' -and (Test-Path "$app/0.0.0.0/WidevineCdm")) {
-            Copy-Item "$app/0.0.0.0/WidevineCdm" "$app/WidevineCdm" -Recurse -Force
-            "Flat fallback: copied 0.0.0.0/WidevineCdm -> Helium/WidevineCdm, re-probing..." | Add-Content "$env:SMOKE/summary.md"
-            $eme3 = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileC" -Log "$env:SMOKE/emeC.log" -Probe "$env:SMOKE/probe.html" -Label "C-flatfallback"
-            "emeC=$eme3" | Set-Content "$env:SMOKE/emeC.txt"
-            "Flat fallback EME: $eme3" | Add-Content "$env:SMOKE/summary.md"
-          }
 
           if ($fail.Count -gt 0) { throw "Phase B failed: $($fail -join '; ')" }
 
@@ -271,20 +268,18 @@ jobs:
           $P1 = Read-Result "$env:SMOKE/emeP1.txt"
           $P2 = Read-Result "$env:SMOKE/emeP2.txt"
           $B0 = Read-Result "$env:SMOKE/emeB.txt"
-          $B2 = Read-Result "$env:SMOKE/emeC.txt"
           $fails = @()
           $app = "$env:SMOKE/fresh/Helium_Portable/Helium"
+          $ver = '${{ steps.rel.outputs.ver }}'
           $chromeVer = ''
           if (Test-Path "$app/chrome.exe") { $chromeVer = (Get-Item "$app/chrome.exe").VersionInfo.ProductVersion }
 
           "" | Add-Content $summary
           "## Probe results" | Add-Content $summary
-          "- A0 shipped layout (Helium/version.txt dir): EME=$($A0.eme); component=$($A0.comp)" | Add-Content $summary
-          if ($P1.eme -ne 'MISSING') { "- P1 chrome internal dir ($chromeVer): EME=$($P1.eme); component=$($P1.comp)" | Add-Content $summary }
-          if ($P2.eme -ne 'MISSING') { "- P2 flat Helium/WidevineCdm: EME=$($P2.eme); component=$($P2.comp)" | Add-Content $summary
-          }
-          "- B0 after update.bat: EME=$($B0.eme); component=$($B0.comp)" | Add-Content $summary
-          if ($B2.eme -ne 'MISSING') { "- B2 post-update + flat fallback: EME=$($B2.eme); component=$($B2.comp)" | Add-Content $summary }
+          "- A0 shipped flat layout (Helium\WidevineCdm): EME=$($A0.eme); component=$($A0.comp)" | Add-Content $summary
+          if ($P1.eme -ne 'MISSING') { "- P1 versioned Helium/$ver (pre-fix layout): EME=$($P1.eme); component=$($P1.comp)" | Add-Content $summary }
+          if ($P2.eme -ne 'MISSING') { "- P2 chrome internal dir ($chromeVer): EME=$($P2.eme); component=$($P2.comp)" | Add-Content $summary }
+          "- B0 after update.bat (legacy install migrated to flat): EME=$($B0.eme); component=$($B0.comp)" | Add-Content $summary
 
           "" | Add-Content $summary
           "## chrome stderr Widevine/CDM lines" | Add-Content $summary
@@ -300,21 +295,22 @@ jobs:
           $okA0 = $A0.eme -eq 'CDM_OK'
           $okB0 = $B0.eme -eq 'CDM_OK'
 
-          if ($okA0 -and $okB0) {
-            "**#5 NOT REPRODUCIBLE** — CDM resolves on the fresh zip and after a real update.bat version bump. Evidence to close #5." | Add-Content $summary
+          if ($B0.eme -eq 'MISSING') {
+            $fails += "Phase B did not run or produced no result (earlier step failed)"
+            "**PHASE B MISSING** — the update-flow verification did not complete; see the failed step above." | Add-Content $summary
+          } elseif ($okA0 -and $okB0) {
+            "**#5 RESOLVED — evidence to close** — CDM resolves on the fresh flat-layout zip ($($A0.eme)) AND after a real update.bat run that migrated a legacy nested install ($($B0.eme)). Layout + update flow verified end-to-end on chrome.exe $chromeVer." | Add-Content $summary
           } elseif ($okA0 -and -not $okB0) {
-            $fails += "#5 CONFIRMED: fresh=CDM_OK but post-update=$($B0.eme)"
-            "**#5 CONFIRMED** — fresh install resolves the CDM, post-update does not ($($B0.eme)); update.bat did not recreate the versioned dir." | Add-Content $summary
-            if ($B2.eme -ne 'MISSING') { "Flat fallback after update: $($B2.eme) (mitigation direction)." | Add-Content $summary }
-          } elseif ($P1.eme -eq 'CDM_OK') {
-            $fails += "layout path bug: shipped dir fails but chrome internal dir $chromeVer works"
-            "**LAYOUT PATH BUG (spec risk CONFIRMED)** — shipped Helium/version.txt dir fails ($($A0.eme)) but Chrome finds the CDM at its internal version dir $chromeVer ($($P1.eme)). Build must place WidevineCdm under chrome.exe ProductVersion, not helium version. Flat: $($P2.eme)." | Add-Content $summary
-          } elseif ($P2.eme -eq 'CDM_OK') {
-            $fails += "versioned path not honored; flat location works"
-            "**VERSIONED PATH NOT HONORED — FLAT WORKS (spec risk CONFIRMED)** — shipped versioned dir fails ($($A0.eme)), chrome internal dir fails ($($P1.eme)), but flat Helium/WidevineCdm resolves ($($P2.eme)). Use flat fallback as the fix." | Add-Content $summary
+            $fails += "#5 CONFIRMED: fresh flat=CDM_OK but post-update=$($B0.eme)"
+            "**#5 CONFIRMED** — fresh flat layout resolves the CDM but after update.bat it does not ($($B0.eme)); migration/preservation broken." | Add-Content $summary
+          } elseif ((-not $okA0) -and (($P1.eme -eq 'CDM_OK') -or ($P2.eme -eq 'CDM_OK'))) {
+            $where = if ($P1.eme -eq 'CDM_OK') { "legacy versioned Helium/$ver" } else { "chrome internal dir $chromeVer" }
+            $alt = if ($P1.eme -eq 'CDM_OK') { $P1.eme } else { $P2.eme }
+            $fails += "layout regression: flat fails but $where works"
+            "**LAYOUT REGRESSION** — flat shipped path fails ($($A0.eme)) but $where resolves ($alt). Re-check main.yml CDM copy / update.bat migration." | Add-Content $summary
           } else {
             $fails += "EME unavailable in CI: A0=$($A0.eme), P1=$($P1.eme), P2=$($P2.eme)"
-            "**EME UNAVAILABLE IN CI** — none of the CDM locations resolve under headless Windows CI (A0=$($A0.eme), P1=$($P1.eme), P2=$($P2.eme)); chrome cannot be validated remotely in this environment. Filesystem verdict stands: update.bat does NOT recreate Helium/<ver>/WidevineCdm after a version bump (the #5 gap at file level). See stderr lines above for chrome's own CDM messages." | Add-Content $summary
+            "**EME UNAVAILABLE IN CI** — no CDM location resolves under headless Windows CI (flat A0=$($A0.eme), versioned P1=$($P1.eme), chrome-ver P2=$($P2.eme)); chrome cannot be validated remotely in this environment. Filesystem asserts above (flat layout, migration, version bump, protected files) still stand as #5 evidence. See stderr lines above for chrome's own CDM messages." | Add-Content $summary
           }
 
           "" | Add-Content $summary

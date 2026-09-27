@@ -28,7 +28,7 @@ Helium_Portable/
 │   ├── bypass_windows_defender.bat
 │   ├── debloater.reg
 │   ├── version.txt
-│   └── <version>/WidevineCdm/
+│   └── WidevineCdm/
 ├── Data/                       runtime profile (created on first run)
 └── Cache/                      runtime cache (created on first run)
 ```

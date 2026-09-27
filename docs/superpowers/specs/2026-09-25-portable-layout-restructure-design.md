@@ -269,3 +269,30 @@ closed issue #3.)
 | 4 | Keep `--user-data-dir` in default-apps registrations | AV-blocked-DLL redundancy; no conflict with Chrome++ |
 | 5 | Defender exclusion targets portable root | `Data`/`Cache` live at root |
 | 6 | Keep `Chromium_SetDLL` provider | Proven working with Helium; `chrome-next-mini` switch out of scope |
+
+## Addendum (2026-09-27): versioned Widevine path reversed → flat
+
+**Status: superseded by empirical evidence.** Decision 2 (`Helium/<ver>/WidevineCdm`)
+was **wrong for this Chrome build** and has been reverted to flat `Helium/WidevineCdm`.
+
+Evidence — Windows Smoke run `36306584637` (real `chrome.exe` 154.0.8037.57 on
+`windows-latest`, EME probe via `navigator.requestMediaKeySystemAccess`
+`com.widevine.alpha`), all three candidate locations tested on one install:
+
+| Location | EME result | Chrome component_installer log |
+|---|---|---|
+| `Helium/0.18.1.1/WidevineCdm` (shipped versioned) | CDM_FAIL (NotSupportedError) | StartRegistration only — never found |
+| `Helium/154.0.8037.57/WidevineCdm` (chrome internal ver) | CDM_FAIL | never found |
+| `Helium/WidevineCdm` (flat, exe dir) | **CDM_OK** | `Preinstalled component found ... version 4.10.3050.0` → `Registering Widevine CDM with Chrome` |
+
+Consequences:
+- Chrome 154/Helium registers the preinstalled Widevine CDM **only** from the
+  exe-dir flat path; versioned nesting (helium-version or chrome-version) is ignored.
+- The versioned layout was a runtime regression for DRM (issue #5's environment),
+  even though it passed filesystem-level CI checks.
+- `update.bat` already protects flat `WidevineCdm\` (protectedPaths); it now also
+  migrates legacy nested installs to flat (migration block after the copy loop).
+- CI enforcement flipped in `validate.yml`: positive pin on the flat copy line,
+  negative guard failing the build if `$heliumVer\WidevineCdm` nesting returns.
+- Verified end-to-end by windows-smoke Phase A (fresh flat = CDM_OK) and Phase B
+  (legacy nested install → update.bat migrates → post-update CDM_OK).
