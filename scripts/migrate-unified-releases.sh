@@ -215,6 +215,12 @@ phase_delete() {
     echo "dry-run only: $count releases + tags listed, nothing deleted"
     return 0
   fi
+  if [ "${DELETE_CONFIRM:-}" != "yes" ]; then
+    echo "REFUSED: real delete requires DELETE_CONFIRM=yes." >&2
+    echo "Note: the operator DECLINED phase 3 on 2026-09-27 (coexistence is the" >&2
+    echo "final state) — run this only on a NEW explicit operator request." >&2
+    exit 1
+  fi
   echo "Deleting $count verified per-arch releases + git tags..."
   while read -r t; do
     [ -z "$t" ] && continue
@@ -235,5 +241,5 @@ case "${1:-}" in
   create) phase_create ;;
   verify) phase_verify ;;
   delete) phase_delete "${2:-}" ;;
-  *) echo "usage: $0 create|verify|delete [--dry-run]" >&2; exit 2 ;;
+  *) echo "usage: $0 create|verify|delete [--dry-run]  (real delete also needs DELETE_CONFIRM=yes)" >&2; exit 2 ;;
 esac
