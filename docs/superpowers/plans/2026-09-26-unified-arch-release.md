@@ -159,7 +159,7 @@ Run:
 python3 -c "import yaml; yaml.safe_load(open('.github/workflows/main.yml')); yaml.safe_load(open('.github/workflows/validate.yml')); print('YAML OK')"
 grep -c 'action-gh-release' .github/workflows/main.yml        # expect 1
 grep -qF 'needs: [check, build]' .github/workflows/main.yml && echo "gating OK"
-grep -qF 'tag_name: helium-portable_${{' .github/workflows/main.yml && echo "unified tag OK"
+grep -qE 'tag_name: helium-portable_\$\{\{' .github/workflows/main.yml && echo "unified tag OK"
 grep -qF 'TAG="helium-portable_${HELIUM_VER}_${PLUS_VER}"' .github/workflows/main.yml && echo "check-side tag OK"
 grep -qF 'upload-artifact@v4' .github/workflows/main.yml && echo "artifact OK"
 grep -qF '\\\\App\\\\' .github/workflows/validate.yml && echo "issue#7 guard OK"
@@ -191,7 +191,7 @@ git commit -m "feat(release): unify per-version releases (artifact bridge + sing
         # Unified release scheme: one tag per version, single publish point
         # (spec: docs/superpowers/specs/2026-09-26-unified-arch-release-design.md §3.5)
         grep -qF 'TAG="helium-portable_${HELIUM_VER}_${PLUS_VER}"' .github/workflows/main.yml || { echo "  ERROR: check job does not build the unified release tag"; exit 1; }
-        grep -qF 'tag_name: helium-portable_${{' .github/workflows/main.yml || { echo "  ERROR: release job tag_name is not the unified scheme"; exit 1; }
+        grep -qE 'tag_name: helium-portable_\$\{\{' .github/workflows/main.yml || { echo "  ERROR: release job tag_name is not the unified scheme"; exit 1; }
         grep -qF 'upload-artifact@v4' .github/workflows/main.yml || { echo "  ERROR: matrix builds must upload artifacts (no direct publish)"; exit 1; }
         grep -qF 'needs: [check, build]' .github/workflows/main.yml || { echo "  ERROR: release job must gate on both check and build"; exit 1; }
         SOFTPROPS_COUNT=$(grep -c 'action-gh-release' .github/workflows/main.yml || true)
