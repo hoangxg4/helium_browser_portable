@@ -60,28 +60,46 @@ jobs:
         run: |
           [IO.File]::WriteAllBytes("$env:SMOKE/probe.html", [Convert]::FromBase64String($env:PROBE_B64))
           $helper = @'
-          param([string]$App, [string]$Profile, [string]$Log, [string]$Probe)
+          param([string]$App, [string]$Profile, [string]$Log, [string]$Probe, [string]$Label)
           $exe = Join-Path $App 'chrome.exe'
           $uri = 'file:///' + ($Probe -replace '\\', '/')
-          $dom = & $exe --headless=new --disable-gpu --no-first-run --no-default-browser-check `
-            --disable-crash-reporter --user-data-dir="$Profile" --enable-logging=stderr --v=1 `
-            --virtual-time-budget=12000 --dump-dom "$uri" 2>&1 | Out-String
+          $chArgs = @('--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check',
+                    '--disable-crash-reporter',"--user-data-dir=$Profile",'--enable-logging=stderr','--v=1')
+          $dom = & $exe @chArgs --virtual-time-budget=12000 --dump-dom "$uri" 2>&1 | Out-String
+          $ec = $LASTEXITCODE
           Set-Content -Encoding utf8 $Log $dom
           Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
-          $eme = if ($dom -match 'CDM_OK') { 'CDM_OK' }
-                 elseif ($dom -match 'CDM_FAIL:[^<]+') { $Matches[0] }
-                 elseif ($dom -match 'CDM_THROW:\w+') { $Matches[0] }
-                 else { 'NO_RESULT' }
+          $eme = 'NO_RESULT'
+          if ($dom -match 'CDM_OK') { $eme = 'CDM_OK' }
+          elseif ($dom -match 'CDM_FAIL:[^<]+') { $eme = $Matches[0] }
+          elseif ($dom -match 'CDM_THROW:\w+') { $eme = $Matches[0] }
+          # Retry with a longer virtual-time budget if the page never settled.
+          if ($eme -eq 'NO_RESULT') {
+            $dom = & $exe @chArgs --virtual-time-budget=40000 --dump-dom "$uri" 2>&1 | Out-String
+            $ec = $LASTEXITCODE
+            Add-Content -Encoding utf8 $Log $dom
+            Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
+            if ($dom -match 'CDM_OK') { $eme = 'CDM_OK' }
+            elseif ($dom -match 'CDM_FAIL:[^<]+') { $eme = $Matches[0] }
+            elseif ($dom -match 'CDM_THROW:\w+') { $eme = $Matches[0] }
+          }
           # chrome://components disambiguates "headless denies EME" from "CDM not found".
-          $comp = 'NO_DATA'
+          $comp = 'NO_DATA'; $ec2 = -1; $wvLines = ''
           try {
-            $cdom = & $exe --headless=new --disable-gpu --no-first-run --disable-crash-reporter `
-              --user-data-dir="$Profile" --virtual-time-budget=8000 --dump-dom 'chrome://components/' 2>&1 | Out-String
+            $cdom = & $exe @chArgs --virtual-time-budget=8000 --dump-dom 'chrome://components/' 2>&1 | Out-String
+            $ec2 = $LASTEXITCODE
             Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
             Set-Content -Encoding utf8 ($Log -replace '\.log$', '-components.log') $cdom
             if ($cdom -match '(?s)WidevineCdm.{0,800}?(\d+\.\d+\.\d+\.\d+)') { $comp = $Matches[1] }
             elseif ($cdom -match '(?s)Widevine Content Decryption Module.{0,600}?(Not Found|Failed to[^<]*|0\.0\.0\.0)') { $comp = 'NOT_FOUND' }
-          } catch { $comp = 'ERROR' }
+            $wvLines = (($cdom -split "`n" | Where-Object { $_ -match 'widevine|Widevine' } | Select-Object -First 4) -join ' || ')
+            if ($wvLines.Length -gt 400) { $wvLines = $wvLines.Substring(0,400) }
+          } catch { $comp = 'ERROR:' + $_.Exception.Message }
+          # Diagnostics to summary (helps tell env-broken from path-broken).
+          $head = ''
+          if ($dom.Length -gt 0) { $head = ($dom -replace '\s+', ' ').Substring(0, [Math]::Min(400, $dom.Length)) }
+          "[$Label] chrome exit=$ec; domLength=$($dom.Length); domHead=[$head]" | Add-Content "$env:SMOKE/summary.md"
+          "[$Label] components exit=$ec2; component=$comp; widevineLines=[$wvLines]" | Add-Content "$env:SMOKE/summary.md"
           return "eme=$eme; component=$comp"
           '@
           Set-Content -Encoding utf8 "$env:SMOKE/run-probe.ps1" $helper
@@ -107,8 +125,13 @@ jobs:
           Assert (Test-Path "$app/$ver/WidevineCdm/manifest.json") "fresh: versioned WidevineCdm present (layout)"
           Assert (-not (Test-Path "$app/WidevineCdm")) "fresh: no flat WidevineCdm (layout)"
           "chrome.exe ProductVersion: $((Get-Item "$app/chrome.exe").VersionInfo.ProductVersion)" | Add-Content "$env:SMOKE/summary.md"
+          # Sanity: can headless chrome dump DOM at all in this environment?
+          $exe = "$app/chrome.exe"
+          $blank = & $exe --headless=new --disable-gpu --no-first-run --disable-crash-reporter --user-data-dir="$env:SMOKE/profileSanity" --virtual-time-budget=3000 --dump-dom 'about:blank' 2>&1 | Out-String
+          "chrome sanity (about:blank): exit=$LASTEXITCODE; length=$($blank.Length); head=[$(($blank -replace '\s+',' ').Substring(0, [Math]::Min(200, $blank.Length)))]" | Add-Content "$env:SMOKE/summary.md"
+          Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
 
-          $eme = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileA" -Log "$env:SMOKE/emeA.log" -Probe "$env:SMOKE/probe.html"
+          $eme = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileA" -Log "$env:SMOKE/emeA.log" -Probe "$env:SMOKE/probe.html" -Label "A-fresh"
           "emeA=$eme" | Set-Content "$env:SMOKE/emeA.txt"
           "Phase A EME: $eme" | Add-Content "$env:SMOKE/summary.md"
 
@@ -176,7 +199,7 @@ jobs:
           Assert $oldCdm "update: old versioned CDM dir preserved (not deleted)"
 
           # EME probe after the update.
-          $eme = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileB" -Log "$env:SMOKE/emeB.log" -Probe "$env:SMOKE/probe.html"
+          $eme = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileB" -Log "$env:SMOKE/emeB.log" -Probe "$env:SMOKE/probe.html" -Label "B-postupdate"
           "emeB=$eme" | Set-Content "$env:SMOKE/emeB.txt"
           "Phase B EME: $eme" | Add-Content "$env:SMOKE/summary.md"
 
@@ -184,7 +207,7 @@ jobs:
           if ($eme -notmatch 'eme=CDM_OK' -and (Test-Path "$app/0.0.0.0/WidevineCdm")) {
             Copy-Item "$app/0.0.0.0/WidevineCdm" "$app/WidevineCdm" -Recurse -Force
             "Flat fallback: copied 0.0.0.0/WidevineCdm -> Helium/WidevineCdm, re-probing..." | Add-Content "$env:SMOKE/summary.md"
-            $eme3 = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileC" -Log "$env:SMOKE/emeC.log" -Probe "$env:SMOKE/probe.html"
+            $eme3 = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileC" -Log "$env:SMOKE/emeC.log" -Probe "$env:SMOKE/probe.html" -Label "C-flatfallback"
             "emeC=$eme3" | Set-Content "$env:SMOKE/emeC.txt"
             "Flat fallback EME: $eme3" | Add-Content "$env:SMOKE/summary.md"
           }
