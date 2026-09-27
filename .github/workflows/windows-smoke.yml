@@ -137,40 +137,12 @@ jobs:
           Assert (Test-Path "$app/$ver/WidevineCdm/manifest.json") "fresh: versioned WidevineCdm present (layout)"
           Assert (-not (Test-Path "$app/WidevineCdm")) "fresh: no flat WidevineCdm (layout)"
           "chrome.exe ProductVersion: $((Get-Item "$app/chrome.exe").VersionInfo.ProductVersion); size=$((Get-Item "$app/chrome.exe").Length)" | Add-Content "$env:SMOKE/summary.md"
-          # Environment diagnostics: capture chrome output via STARTUPINFO redirection
-          # (bypasses pwsh pipelines) across variants.
-          function Invoke-Chrome([string]$tag, [string[]]$extra, [string]$app) {
-            $out = "$env:SMOKE/san-$tag-out.txt"; $err = "$env:SMOKE/san-$tag-err.txt"
-            $prof = "$env:SMOKE/profileSanity-$tag"
-            $argList = $extra + @('--disable-gpu','--no-first-run','--no-default-browser-check',"--user-data-dir=$prof",'--dump-dom','about:blank')
-            try {
-              $p = Start-Process -FilePath "$app/chrome.exe" -ArgumentList $argList -PassThru -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError $err
-              if (-not $p.WaitForExit(45000)) { $p.Kill($true); $p.WaitForExit(5000); "diag[$tag]: TIMEOUT after 45s, killed" | Add-Content "$env:SMOKE/summary.md" }
-            } catch { "diag[$tag]: START_FAILED $($_.Exception.Message)" | Add-Content "$env:SMOKE/summary.md"; return $false }
-            $oText = ''; if (Test-Path $out) { $oText = Get-Content $out -Raw }; if ($null -eq $oText) { $oText = '' }
-            $eText = ''; if (Test-Path $err) { $eText = Get-Content $err -Raw }; if ($null -eq $eText) { $eText = '' }
-            $oHead = ($oText -replace '\s+', ' '); if ($oHead.Length -gt 150) { $oHead = $oHead.Substring(0, 150) }
-            $eHead = ($eText -replace '\s+', ' '); if ($eHead.Length -gt 200) { $eHead = $eHead.Substring(0, 200) }
-            $exitCode = 'killed'; if ($p.HasExited) { $exitCode = $p.ExitCode }
-            "diag[$tag]: exit=$exitCode; outLen=$($oText.Length); errLen=$($eText.Length); out=[$oHead]; err=[$eHead]" | Add-Content "$env:SMOKE/summary.md"
-            return ($oText.Length -gt 0)
-          }
-          "chrome dir: $((Get-ChildItem $app -File | Sort-Object Length -Descending | Select-Object -First 8 | ForEach-Object { $_.Name + '=' + $_.Length }) -join ', ')" | Add-Content "$env:SMOKE/summary.md"
-          $gotOutput = Invoke-Chrome 'headlessnew' @('--headless=new') $app
-          if (-not $gotOutput) { $gotOutput = Invoke-Chrome 'headless' @('--headless') $app }
-          if (-not $gotOutput) { $null = Invoke-Chrome 'headed' @() $app }
-          if (-not $gotOutput -and (Test-Path "$app/version.dll")) {
-            Move-Item "$app/version.dll" "$app/version.dll.bak" -Force
-            $gotOutput = Invoke-Chrome 'noversiondll' @('--headless=new') $app
-            Move-Item "$app/version.dll.bak" "$app/version.dll" -Force
-            "diag: version.dll temporarily removed for noversiondll run; restored=$(Test-Path "$app/version.dll")" | Add-Content "$env:SMOKE/summary.md"
-          }
-          $sanProf = Get-ChildItem "$env:SMOKE" -Directory -Filter 'profileSanity*' | Select-Object -First 1
-          if ($sanProf) {
-            $files = Get-ChildItem $sanProf.FullName -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 12
-            "diag[profile]: $($files.Count) files: $(($files | ForEach-Object { $_.Name }) -join ', ')" | Add-Content "$env:SMOKE/summary.md"
-          }
-          Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
+          # Chrome++ version.dll (issue #7 artifact) hijacks app-local version.dll and
+          # suppresses --dump-dom output entirely on CI (verified: exit=0, 0 bytes with
+          # it present; normal output without it). Real users never use --dump-dom, and
+          # Chrome++ portable-mode behavior is not under test — move it aside for probes.
+          Move-Item "$app/version.dll" "$app/version.dll.hidden" -Force
+          "NOTE: version.dll moved aside for probing (Chrome++ portable loader silences --dump-dom on CI; see workflow history run #4)" | Add-Content "$env:SMOKE/summary.md"
 
           $eme = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileA" -Log "$env:SMOKE/emeA.log" -Probe "$env:SMOKE/probe.html" -Label "A-fresh"
           "emeA=$eme" | Set-Content "$env:SMOKE/emeA.txt"
