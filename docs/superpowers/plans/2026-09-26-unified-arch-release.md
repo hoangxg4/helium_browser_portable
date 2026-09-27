@@ -629,6 +629,11 @@ Then reply with only: **Status:** DONE | DONE_WITH_CONCERNS | BLOCKED, one-line 
 
 ### Task 5: Gated delete phase + post-deletion verification
 
+> **[2026-09-27] Operator DECLINED this phase ("Không xóa") — coexistence
+> (73 old per-arch + 54 unified) is the final state; see the spec's
+> Execution status. Retained for audit; must NOT run without a NEW explicit
+> operator request (the script's real delete also requires `DELETE_CONFIRM=yes`).
+
 **Files:**
 - Create: none in git (evidence report `.superpowers/sdd/2026-09-26-unified-arch-release/task-5-report.md`).
 

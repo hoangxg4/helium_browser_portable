@@ -1,7 +1,7 @@
 # Unified Per-Version Release — Design
 
 Date: 2026-09-26
-Status: approved by operator (design decisions recorded inline); pending spec review
+Status: implemented & operator-approved (delivered 2026-09-27; see Execution status)
 
 **Execution status (2026-09-27):** Operator answered "Không xóa" — phase-3
 deletion of the 73 per-arch releases was **DECLINED**. Final state is
