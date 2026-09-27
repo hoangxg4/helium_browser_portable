@@ -63,41 +63,53 @@ jobs:
           param([string]$App, [string]$Profile, [string]$Log, [string]$Probe, [string]$Label)
           $exe = Join-Path $App 'chrome.exe'
           $uri = 'file:///' + ($Probe -replace '\\', '/')
-          $chArgs = @('--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check',
+          function Invoke-Dump([string[]]$argList, [string]$tag) {
+            $out = "$env:SMOKE/dump-$tag-out.txt"; $err = "$env:SMOKE/dump-$tag-err.txt"
+            try {
+              $p = Start-Process -FilePath $exe -ArgumentList $argList -PassThru -NoNewWindow `
+                -RedirectStandardOutput $out -RedirectStandardError $err
+              if (-not $p.WaitForExit(60000)) { $p.Kill($true); $p.WaitForExit(5000) }
+            } catch {
+              return @{ exit = -999; out = "START_FAILED: $($_.Exception.Message)" }
+            }
+            Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
+            $o = ''
+            if (Test-Path $out) { $o = Get-Content $out -Raw }
+            if ($null -eq $o) { $o = '' }
+            $ec = 'killed'; if ($p.HasExited) { $ec = $p.ExitCode }
+            return @{ exit = $ec; out = $o }
+          }
+          $base = @('--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check',
                     '--disable-crash-reporter',"--user-data-dir=$Profile",'--enable-logging=stderr','--v=1')
-          $dom = & $exe @chArgs --virtual-time-budget=12000 --dump-dom "$uri" 2>&1 | Out-String
-          $ec = $LASTEXITCODE
+          $r = Invoke-Dump ($base + @('--virtual-time-budget=12000','--dump-dom',$uri)) "$Label-1"
+          $dom = $r.out
+          $ec = $r.exit
           Set-Content -Encoding utf8 $Log $dom
-          Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
           $eme = 'NO_RESULT'
           if ($dom -match 'CDM_OK') { $eme = 'CDM_OK' }
           elseif ($dom -match 'CDM_FAIL:[^<]+') { $eme = $Matches[0] }
           elseif ($dom -match 'CDM_THROW:\w+') { $eme = $Matches[0] }
-          # Retry with a longer virtual-time budget if the page never settled.
           if ($eme -eq 'NO_RESULT') {
-            $dom = & $exe @chArgs --virtual-time-budget=40000 --dump-dom "$uri" 2>&1 | Out-String
-            $ec = $LASTEXITCODE
+            $r = Invoke-Dump ($base + @('--virtual-time-budget=40000','--dump-dom',$uri)) "$Label-2"
+            $dom = $r.out; $ec = $r.exit
             Add-Content -Encoding utf8 $Log $dom
-            Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
             if ($dom -match 'CDM_OK') { $eme = 'CDM_OK' }
             elseif ($dom -match 'CDM_FAIL:[^<]+') { $eme = $Matches[0] }
             elseif ($dom -match 'CDM_THROW:\w+') { $eme = $Matches[0] }
           }
           # chrome://components disambiguates "headless denies EME" from "CDM not found".
           $comp = 'NO_DATA'; $ec2 = -1; $wvLines = ''
-          try {
-            $cdom = & $exe @chArgs --virtual-time-budget=8000 --dump-dom 'chrome://components/' 2>&1 | Out-String
-            $ec2 = $LASTEXITCODE
-            Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
-            Set-Content -Encoding utf8 ($Log -replace '\.log$', '-components.log') $cdom
-            if ($cdom -match '(?s)WidevineCdm.{0,800}?(\d+\.\d+\.\d+\.\d+)') { $comp = $Matches[1] }
-            elseif ($cdom -match '(?s)Widevine Content Decryption Module.{0,600}?(Not Found|Failed to[^<]*|0\.0\.0\.0)') { $comp = 'NOT_FOUND' }
-            $wvLines = (($cdom -split "`n" | Where-Object { $_ -match 'widevine|Widevine' } | Select-Object -First 4) -join ' || ')
-            if ($wvLines.Length -gt 400) { $wvLines = $wvLines.Substring(0,400) }
-          } catch { $comp = 'ERROR:' + $_.Exception.Message }
-          # Diagnostics to summary (helps tell env-broken from path-broken).
+          $r2 = Invoke-Dump ($base + @('--virtual-time-budget=8000','--dump-dom','chrome://components/')) "$Label-comp"
+          $ec2 = $r2.exit
+          $cdom = $r2.out
+          Set-Content -Encoding utf8 ($Log -replace '\.log$', '-components.log') $cdom
+          if ($cdom -match '(?s)WidevineCdm.{0,800}?(\d+\.\d+\.\d+\.\d+)') { $comp = $Matches[1] }
+          elseif ($cdom -match '(?s)Widevine Content Decryption Module.{0,600}?(Not Found|Failed to[^<]*|0\.0\.0\.0)') { $comp = 'NOT_FOUND' }
+          $wvLines = (($cdom -split "`n" | Where-Object { $_ -match 'widevine|Widevine' } | Select-Object -First 4) -join ' || ')
+          if ($wvLines.Length -gt 400) { $wvLines = $wvLines.Substring(0,400) }
+          # Diagnostics to summary.
           $head = ''
-          if ($dom.Length -gt 0) { $head = ($dom -replace '\s+', ' ').Substring(0, [Math]::Min(400, $dom.Length)) }
+          if ($dom.Length -gt 0) { $head = ($dom -replace '\s+', ' '); if ($head.Length -gt 400) { $head = $head.Substring(0,400) } }
           "[$Label] chrome exit=$ec; domLength=$($dom.Length); domHead=[$head]" | Add-Content "$env:SMOKE/summary.md"
           "[$Label] components exit=$ec2; component=$comp; widevineLines=[$wvLines]" | Add-Content "$env:SMOKE/summary.md"
           return "eme=$eme; component=$comp"
@@ -124,11 +136,40 @@ jobs:
           Assert ((Get-Content "$app/version.txt" -Raw).Trim() -eq $ver) "fresh: version.txt == $ver"
           Assert (Test-Path "$app/$ver/WidevineCdm/manifest.json") "fresh: versioned WidevineCdm present (layout)"
           Assert (-not (Test-Path "$app/WidevineCdm")) "fresh: no flat WidevineCdm (layout)"
-          "chrome.exe ProductVersion: $((Get-Item "$app/chrome.exe").VersionInfo.ProductVersion)" | Add-Content "$env:SMOKE/summary.md"
-          # Sanity: can headless chrome dump DOM at all in this environment?
-          $exe = "$app/chrome.exe"
-          $blank = & $exe --headless=new --disable-gpu --no-first-run --disable-crash-reporter --user-data-dir="$env:SMOKE/profileSanity" --virtual-time-budget=3000 --dump-dom 'about:blank' 2>&1 | Out-String
-          "chrome sanity (about:blank): exit=$LASTEXITCODE; length=$($blank.Length); head=[$(($blank -replace '\s+',' ').Substring(0, [Math]::Min(200, $blank.Length)))]" | Add-Content "$env:SMOKE/summary.md"
+          "chrome.exe ProductVersion: $((Get-Item "$app/chrome.exe").VersionInfo.ProductVersion); size=$((Get-Item "$app/chrome.exe").Length)" | Add-Content "$env:SMOKE/summary.md"
+          # Environment diagnostics: capture chrome output via STARTUPINFO redirection
+          # (bypasses pwsh pipelines) across variants.
+          function Invoke-Chrome([string]$tag, [string[]]$extra, [string]$app) {
+            $out = "$env:SMOKE/san-$tag-out.txt"; $err = "$env:SMOKE/san-$tag-err.txt"
+            $prof = "$env:SMOKE/profileSanity-$tag"
+            $argList = $extra + @('--disable-gpu','--no-first-run','--no-default-browser-check',"--user-data-dir=$prof",'--dump-dom','about:blank')
+            try {
+              $p = Start-Process -FilePath "$app/chrome.exe" -ArgumentList $argList -PassThru -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError $err
+              if (-not $p.WaitForExit(45000)) { $p.Kill($true); $p.WaitForExit(5000); "diag[$tag]: TIMEOUT after 45s, killed" | Add-Content "$env:SMOKE/summary.md" }
+            } catch { "diag[$tag]: START_FAILED $($_.Exception.Message)" | Add-Content "$env:SMOKE/summary.md"; return $false }
+            $oText = ''; if (Test-Path $out) { $oText = Get-Content $out -Raw }; if ($null -eq $oText) { $oText = '' }
+            $eText = ''; if (Test-Path $err) { $eText = Get-Content $err -Raw }; if ($null -eq $eText) { $eText = '' }
+            $oHead = ($oText -replace '\s+', ' '); if ($oHead.Length -gt 150) { $oHead = $oHead.Substring(0, 150) }
+            $eHead = ($eText -replace '\s+', ' '); if ($eHead.Length -gt 200) { $eHead = $eHead.Substring(0, 200) }
+            $exitCode = 'killed'; if ($p.HasExited) { $exitCode = $p.ExitCode }
+            "diag[$tag]: exit=$exitCode; outLen=$($oText.Length); errLen=$($eText.Length); out=[$oHead]; err=[$eHead]" | Add-Content "$env:SMOKE/summary.md"
+            return ($oText.Length -gt 0)
+          }
+          "chrome dir: $((Get-ChildItem $app -File | Sort-Object Length -Descending | Select-Object -First 8 | ForEach-Object { $_.Name + '=' + $_.Length }) -join ', ')" | Add-Content "$env:SMOKE/summary.md"
+          $gotOutput = Invoke-Chrome 'headlessnew' @('--headless=new') $app
+          if (-not $gotOutput) { $gotOutput = Invoke-Chrome 'headless' @('--headless') $app }
+          if (-not $gotOutput) { $null = Invoke-Chrome 'headed' @() $app }
+          if (-not $gotOutput -and (Test-Path "$app/version.dll")) {
+            Move-Item "$app/version.dll" "$app/version.dll.bak" -Force
+            $gotOutput = Invoke-Chrome 'noversiondll' @('--headless=new') $app
+            Move-Item "$app/version.dll.bak" "$app/version.dll" -Force
+            "diag: version.dll temporarily removed for noversiondll run; restored=$(Test-Path "$app/version.dll")" | Add-Content "$env:SMOKE/summary.md"
+          }
+          $sanProf = Get-ChildItem "$env:SMOKE" -Directory -Filter 'profileSanity*' | Select-Object -First 1
+          if ($sanProf) {
+            $files = Get-ChildItem $sanProf.FullName -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 12
+            "diag[profile]: $($files.Count) files: $(($files | ForEach-Object { $_.Name }) -join ', ')" | Add-Content "$env:SMOKE/summary.md"
+          }
           Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
 
           $eme = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileA" -Log "$env:SMOKE/emeA.log" -Probe "$env:SMOKE/probe.html" -Label "A-fresh"
