@@ -55,7 +55,7 @@ jobs:
         else
           REL=$(curl -sSL \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG")
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" || true)
           ASSET_COUNT=$(echo "$REL" | jq '[.assets[]? | select(.name | test("helium-portable-(x64|arm64)_.*\\.zip$"))] | length' 2>/dev/null || echo 0)
           case "$ASSET_COUNT" in
             ''|*[!0-9]*) ASSET_COUNT=0 ;;
@@ -175,6 +175,7 @@ jobs:
 
   release:
     needs: [check, build]
+    if: needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/download-artifact@v4
