@@ -85,21 +85,25 @@ jobs:
           $dom = $r.out
           $ec = $r.exit
           Set-Content -Encoding utf8 $Log $dom
-          $eme = 'NO_RESULT'
-          if ($dom -match 'CDM_OK') { $eme = 'CDM_OK' }
-          elseif ($dom -match 'CDM_FAIL:[^<]+') { $eme = $Matches[0] }
-          elseif ($dom -match 'CDM_THROW:\w+') { $eme = $Matches[0] }
+          # Parse ONLY the rendered result (the page source contains 'CDM_OK' literals).
+          function Get-Eme([string]$text) {
+            if ($text -match '<title>CDM_OK</title>') { return 'CDM_OK' }
+            if ($text -match '(?s)<pre id="o">([^<]+)</pre>') {
+              $pre = $Matches[1].Trim()
+              if ($pre -ne 'pending' -and $pre -ne '') { return $pre }
+            }
+            return 'NO_RESULT'
+          }
+          $eme = Get-Eme $dom
           if ($eme -eq 'NO_RESULT') {
             $r = Invoke-Dump ($base + @('--virtual-time-budget=40000','--dump-dom',$uri)) "$Label-2"
             $dom = $r.out; $ec = $r.exit
             Add-Content -Encoding utf8 $Log $dom
-            if ($dom -match 'CDM_OK') { $eme = 'CDM_OK' }
-            elseif ($dom -match 'CDM_FAIL:[^<]+') { $eme = $Matches[0] }
-            elseif ($dom -match 'CDM_THROW:\w+') { $eme = $Matches[0] }
+            $eme = Get-Eme $dom
           }
           # chrome://components disambiguates "headless denies EME" from "CDM not found".
           $comp = 'NO_DATA'; $ec2 = -1; $wvLines = ''
-          $r2 = Invoke-Dump ($base + @('--virtual-time-budget=8000','--dump-dom','chrome://components/')) "$Label-comp"
+          $r2 = Invoke-Dump ($base + @('--virtual-time-budget=15000','--dump-dom','chrome://components/')) "$Label-comp"
           $ec2 = $r2.exit
           $cdom = $r2.out
           Set-Content -Encoding utf8 ($Log -replace '\.log$', '-components.log') $cdom
@@ -110,8 +114,10 @@ jobs:
           # Diagnostics to summary.
           $head = ''
           if ($dom.Length -gt 0) { $head = ($dom -replace '\s+', ' '); if ($head.Length -gt 400) { $head = $head.Substring(0,400) } }
+          $cHead = ''
+          if ($cdom.Length -gt 0) { $cHead = ($cdom -replace '\s+', ' '); if ($cHead.Length -gt 300) { $cHead = $cHead.Substring(0,300) } }
           "[$Label] chrome exit=$ec; domLength=$($dom.Length); domHead=[$head]" | Add-Content "$env:SMOKE/summary.md"
-          "[$Label] components exit=$ec2; component=$comp; widevineLines=[$wvLines]" | Add-Content "$env:SMOKE/summary.md"
+          "[$Label] components exit=$ec2; component=$comp; domLen=$($cdom.Length); head=[$cHead]" | Add-Content "$env:SMOKE/summary.md"
           return "eme=$eme; component=$comp"
           '@
           Set-Content -Encoding utf8 "$env:SMOKE/run-probe.ps1" $helper
@@ -146,7 +152,29 @@ jobs:
 
           $eme = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileA" -Log "$env:SMOKE/emeA.log" -Probe "$env:SMOKE/probe.html" -Label "A-fresh"
           "emeA=$eme" | Set-Content "$env:SMOKE/emeA.txt"
-          "Phase A EME: $eme" | Add-Content "$env:SMOKE/summary.md"
+          "Phase A EME (shipped layout, Helium/$ver dir): $eme" | Add-Content "$env:SMOKE/summary.md"
+
+          # If the shipped layout does not resolve the CDM, test alternate locations
+          # to separate "wrong versioned path" from "headless cannot do Widevine".
+          if ($eme -notmatch 'eme=CDM_OK') {
+            $chromeVer = (Get-Item "$app/chrome.exe").VersionInfo.ProductVersion
+            "" | Add-Content "$env:SMOKE/summary.md"
+            "## CDM path matrix (shipped path failed)" | Add-Content "$env:SMOKE/summary.md"
+            # P1: chrome's own internal version directory (Application\<chromeVer>\WidevineCdm).
+            New-Item -ItemType Directory -Force "$app/$chromeVer" | Out-Null
+            Move-Item "$app/$ver/WidevineCdm" "$app/$chromeVer/WidevineCdm" -Force
+            $eme1 = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileP1" -Log "$env:SMOKE/emeP1.log" -Probe "$env:SMOKE/probe.html" -Label "P1-chromever"
+            "emeP1=$eme1" | Set-Content "$env:SMOKE/emeP1.txt"
+            "P1 (chrome internal dir $chromeVer): $eme1" | Add-Content "$env:SMOKE/summary.md"
+            Move-Item "$app/$chromeVer/WidevineCdm" "$app/$ver/WidevineCdm" -Force
+            Remove-Item "$app/$chromeVer" -Recurse -Force
+            # P2: flat legacy location (spec's documented contingency).
+            Move-Item "$app/$ver/WidevineCdm" "$app/WidevineCdm" -Force
+            $eme2 = & "$env:SMOKE/run-probe.ps1" -App $app -Profile "$env:SMOKE/profileP2" -Log "$env:SMOKE/emeP2.log" -Probe "$env:SMOKE/probe.html" -Label "P2-flat"
+            "emeP2=$eme2" | Set-Content "$env:SMOKE/emeP2.txt"
+            "P2 (flat Helium/WidevineCdm): $eme2" | Add-Content "$env:SMOKE/summary.md"
+            Move-Item "$app/WidevineCdm" "$app/$ver/WidevineCdm" -Force
+          }
 
           if ($fail.Count -gt 0) {
             throw "Phase A failed: $($fail -join '; ')"
@@ -239,51 +267,54 @@ jobs:
             return @{ eme = $eme; comp = $comp }
           }
           function Test-Comp([string]$c) { return $c -match '^\d+\.\d+\.\d+\.\d+$' -and $c -ne '0.0.0.0' }
-          $A = Read-Result "$env:SMOKE/emeA.txt"
-          $B = Read-Result "$env:SMOKE/emeB.txt"
-          $C = if (Test-Path "$env:SMOKE/emeC.txt") { Read-Result "$env:SMOKE/emeC.txt" } else { $null }
+          $A0 = Read-Result "$env:SMOKE/emeA.txt"
+          $P1 = Read-Result "$env:SMOKE/emeP1.txt"
+          $P2 = Read-Result "$env:SMOKE/emeP2.txt"
+          $B0 = Read-Result "$env:SMOKE/emeB.txt"
+          $B2 = Read-Result "$env:SMOKE/emeC.txt"
           $fails = @()
+          $app = "$env:SMOKE/fresh/Helium_Portable/Helium"
+          $chromeVer = ''
+          if (Test-Path "$app/chrome.exe") { $chromeVer = (Get-Item "$app/chrome.exe").VersionInfo.ProductVersion }
 
           "" | Add-Content $summary
           "## Probe results" | Add-Content $summary
-          "- fresh install: EME=$($A.eme); component=$($A.comp)" | Add-Content $summary
-          "- after update.bat: EME=$($B.eme); component=$($B.comp)" | Add-Content $summary
-          if ($C) { "- flat fallback: EME=$($C.eme); component=$($C.comp)" | Add-Content $summary }
-
-          if ($A.eme -ne 'CDM_OK') {
-            "" | Add-Content $summary
-            "Widevine/CDM log lines (fresh install):" | Add-Content $summary
-            if (Test-Path "$env:SMOKE/emeA.log") {
-              Select-String -Path "$env:SMOKE/emeA.log" -Pattern 'widevine|cdm' -CaseSensitive:$false |
-                Select-Object -First 15 | ForEach-Object { "- $($_.Line.Trim())" } | Add-Content $summary
-            }
+          "- A0 shipped layout (Helium/version.txt dir): EME=$($A0.eme); component=$($A0.comp)" | Add-Content $summary
+          if ($P1.eme -ne 'MISSING') { "- P1 chrome internal dir ($chromeVer): EME=$($P1.eme); component=$($P1.comp)" | Add-Content $summary }
+          if ($P2.eme -ne 'MISSING') { "- P2 flat Helium/WidevineCdm: EME=$($P2.eme); component=$($P2.comp)" | Add-Content $summary
           }
+          "- B0 after update.bat: EME=$($B0.eme); component=$($B0.comp)" | Add-Content $summary
+          if ($B2.eme -ne 'MISSING') { "- B2 post-update + flat fallback: EME=$($B2.eme); component=$($B2.comp)" | Add-Content $summary }
+
+          "" | Add-Content $summary
+          "## chrome stderr Widevine/CDM lines" | Add-Content $summary
+          $anyLog = $false
+          foreach ($f in (Get-ChildItem "$env:SMOKE" -Filter 'dump-*-err.txt' -ErrorAction SilentlyContinue)) {
+            $hits = Get-Content $f.FullName -ErrorAction SilentlyContinue | Where-Object { $_ -match 'widevine|cdm|CDM' } | Select-Object -First 5
+            foreach ($h in $hits) { $anyLog = $true; "- $($f.Name): $($h.Trim())" | Add-Content $summary }
+          }
+          if (-not $anyLog) { "- none found in any probe stderr" | Add-Content $summary }
 
           "" | Add-Content $summary
           "## Verdict" | Add-Content $summary
-          $emeAok = $A.eme -eq 'CDM_OK'
-          $emeBok = $B.eme -eq 'CDM_OK'
-          $compAok = Test-Comp $A.comp
-          $compBok = Test-Comp $B.comp
+          $okA0 = $A0.eme -eq 'CDM_OK'
+          $okB0 = $B0.eme -eq 'CDM_OK'
 
-          if ($emeAok -and $emeBok) {
-            "**#5 NOT REPRODUCIBLE** — EME resolves on the fresh zip and after a real update.bat version bump. Evidence to close #5." | Add-Content $summary
-          } elseif ($emeAok -and -not $emeBok) {
-            $fails += "#5 CONFIRMED (EME): fresh=CDM_OK, post-update=$($B.eme)"
-            "**#5 CONFIRMED (EME)** — fresh install resolves the CDM, post-update does not ($($B.eme)). Component after update: $($B.comp). Versioned dir was not recreated by update.bat." | Add-Content $summary
-            if ($C) { "Flat fallback result: $($C.eme) (mitigation direction for the fix)." | Add-Content $summary }
-          } elseif (-not $emeAok -and $compAok -and $compBok) {
-            "**#5 NOT REPRODUCED (component-level)** — headless EME unavailable (fresh EME=$($A.eme)), but chrome://components registers the CDM before ($($A.comp)) and after ($($B.comp)) the update. EME itself could not be verified in this environment." | Add-Content $summary
-          } elseif (-not $emeAok -and $compAok -and -not $compBok) {
-            $fails += "#5 CONFIRMED (component): CDM registered before update ($($A.comp)) but lost after update (component=$($B.comp))"
-            "**#5 CONFIRMED (component-level)** — CDM registered before the update ($($A.comp)) but chrome no longer sees it after update.bat (component=$($B.comp))." | Add-Content $summary
-            if ($C) { "Flat fallback result: $($C.eme) / $($C.comp)." | Add-Content $summary }
-          } elseif (-not $emeAok -and -not $compAok) {
-            $fails += "fresh zip never registers the CDM (EME=$($A.eme), component=$($A.comp))"
-            "**SPEC RISK CONFIRMED** — on the fresh zip chrome.exe does not register the versioned CDM at all (EME=$($A.eme), component=$($A.comp)): versioned Widevine path not honored, or this headless environment cannot load Widevine. See log lines above." | Add-Content $summary
+          if ($okA0 -and $okB0) {
+            "**#5 NOT REPRODUCIBLE** — CDM resolves on the fresh zip and after a real update.bat version bump. Evidence to close #5." | Add-Content $summary
+          } elseif ($okA0 -and -not $okB0) {
+            $fails += "#5 CONFIRMED: fresh=CDM_OK but post-update=$($B0.eme)"
+            "**#5 CONFIRMED** — fresh install resolves the CDM, post-update does not ($($B0.eme)); update.bat did not recreate the versioned dir." | Add-Content $summary
+            if ($B2.eme -ne 'MISSING') { "Flat fallback after update: $($B2.eme) (mitigation direction)." | Add-Content $summary }
+          } elseif ($P1.eme -eq 'CDM_OK') {
+            $fails += "layout path bug: shipped dir fails but chrome internal dir $chromeVer works"
+            "**LAYOUT PATH BUG (spec risk CONFIRMED)** — shipped Helium/version.txt dir fails ($($A0.eme)) but Chrome finds the CDM at its internal version dir $chromeVer ($($P1.eme)). Build must place WidevineCdm under chrome.exe ProductVersion, not helium version. Flat: $($P2.eme)." | Add-Content $summary
+          } elseif ($P2.eme -eq 'CDM_OK') {
+            $fails += "versioned path not honored; flat location works"
+            "**VERSIONED PATH NOT HONORED — FLAT WORKS (spec risk CONFIRMED)** — shipped versioned dir fails ($($A0.eme)), chrome internal dir fails ($($P1.eme)), but flat Helium/WidevineCdm resolves ($($P2.eme)). Use flat fallback as the fix." | Add-Content $summary
           } else {
-            $fails += "inconclusive: fresh EME=$($A.eme) comp=$($A.comp); post EME=$($B.eme) comp=$($B.comp)"
-            "**INCONCLUSIVE** — results do not fit a decision rule; inspect probe results above." | Add-Content $summary
+            $fails += "EME unavailable in CI: A0=$($A0.eme), P1=$($P1.eme), P2=$($P2.eme)"
+            "**EME UNAVAILABLE IN CI** — none of the CDM locations resolve under headless Windows CI (A0=$($A0.eme), P1=$($P1.eme), P2=$($P2.eme)); chrome cannot be validated remotely in this environment. Filesystem verdict stands: update.bat does NOT recreate Helium/<ver>/WidevineCdm after a version bump (the #5 gap at file level). See stderr lines above for chrome's own CDM messages." | Add-Content $summary
           }
 
           "" | Add-Content $summary
