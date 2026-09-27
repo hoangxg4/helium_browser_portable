@@ -9,6 +9,14 @@ Helium Browser Portable - Chromium-based browser by [imputnet](https://github.co
 - Widevine CDM support for DRM content
 - Auto-update script to fetch latest Helium releases
 
+### Downloads
+Releases are published **per version pair** on the [Releases page](https://github.com/hoangxg4/helium_browser_portable/releases):
+- One release per Helium + Chrome++ combination, tagged `helium-portable_{Helium}_{Chrome++}` (e.g. `helium-portable_0.18.1.1_1.18.2`), containing both arch zips when both were built:
+  - `helium-portable-x64_{Helium}_{Chrome++}.zip` — Intel/AMD 64-bit
+  - `helium-portable-arm64_{Helium}_{Chrome++}.zip` — ARM64
+- Grab the newest pair; pick the zip matching your CPU
+- Older per-arch releases (`helium-portable-x64_...` / `helium-portable-arm64_...` tags) are retained alongside for history
+
 ### Layout
 ```
 Helium_Portable/
