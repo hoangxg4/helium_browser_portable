@@ -141,6 +141,16 @@ jobs:
         grep -qF '$heliumVer\WidevineCdm' .github/workflows/main.yml || { echo "  ERROR: WidevineCdm not nested under the version dir"; exit 1; }
         echo "  hibbiki layout assembly: OK"
 
+        # Unified release scheme: one tag per version, single publish point
+        # (spec: docs/superpowers/specs/2026-09-26-unified-arch-release-design.md §3.5)
+        grep -qF 'TAG="helium-portable_${HELIUM_VER}_${PLUS_VER}"' .github/workflows/main.yml || { echo "  ERROR: check job does not build the unified release tag"; exit 1; }
+        grep -qF 'tag_name: helium-portable_${{' .github/workflows/main.yml || { echo "  ERROR: release job tag_name is not the unified scheme"; exit 1; }
+        grep -qF 'upload-artifact@v4' .github/workflows/main.yml || { echo "  ERROR: matrix builds must upload artifacts (no direct publish)"; exit 1; }
+        grep -qF 'needs: [check, build]' .github/workflows/main.yml || { echo "  ERROR: release job must gate on both check and build"; exit 1; }
+        SOFTPROPS_COUNT=$(grep -c 'action-gh-release' .github/workflows/main.yml || true)
+        [ "$SOFTPROPS_COUNT" -eq 1 ] || { echo "  ERROR: expected exactly 1 action-gh-release publish point, found $SOFTPROPS_COUNT"; exit 1; }
+        echo "  Unified release scheme: OK"
+
     - name: Validate file structure
       run: |
         echo "==> Checking required files"
