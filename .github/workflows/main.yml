@@ -12,10 +12,9 @@ jobs:
       helium_ver: ${{ steps.check.outputs.helium_ver }}
       plus_ver: ${{ steps.check.outputs.plus_ver }}
       plus_url: ${{ steps.check.outputs.plus_url }}
-      exists_x64: ${{ steps.check.outputs.exists_x64 }}
-      exists_arm64: ${{ steps.check.outputs.exists_arm64 }}
       helium_url_x64: ${{ steps.check.outputs.helium_url_x64 }}
       helium_url_arm64: ${{ steps.check.outputs.helium_url_arm64 }}
+      exists: ${{ steps.check.outputs.exists }}
     steps:
     - name: Check versions and releases
       id: check
@@ -41,25 +40,31 @@ jobs:
         echo "x64 URL: $HELIUM_URL_X64"
         echo "arm64 URL: $HELIUM_URL_ARM64"
 
-        # Check existing releases
-        TAG_X64="helium-portable-x64_${HELIUM_VER}_${PLUS_VER}"
-        TAG_ARM64="helium-portable-arm64_${HELIUM_VER}_${PLUS_VER}"
+        # Check existing unified release: tag exists AND both zip assets present.
+        # A tag with a missing arch zip counts as NOT released (self-repair:
+        # rebuild + softprops overwrite adds the missing zip to the same tag).
+        TAG="helium-portable_${HELIUM_VER}_${PLUS_VER}"
 
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          EXISTS_X64="false"
-          EXISTS_ARM64="false"
-          echo "Manual dispatch — building all"
+          EXISTS="false"
+          echo "Manual dispatch — forcing rebuild"
         else
-          EXISTS_X64=$(curl -sSL -o /dev/null -w "%{http_code}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG_X64" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" | grep -q 200 && echo "true" || echo "false")
-          EXISTS_ARM64=$(curl -sSL -o /dev/null -w "%{http_code}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG_ARM64" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" | grep -q 200 && echo "true" || echo "false")
+          REL=$(curl -sSL \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG")
+          ASSET_COUNT=$(echo "$REL" | jq '[.assets[]? | select(.name | test("helium-portable-(x64|arm64)_.*\\.zip$"))] | length' 2>/dev/null || echo 0)
+          case "$ASSET_COUNT" in
+            ''|*[!0-9]*) ASSET_COUNT=0 ;;
+          esac
+          if echo "$REL" | jq -e '.tag_name' >/dev/null 2>&1 && [ "$ASSET_COUNT" -ge 2 ]; then
+            EXISTS="true"
+          else
+            EXISTS="false"
+          fi
         fi
 
-        echo "x64 exists: $EXISTS_X64"
-        echo "arm64 exists: $EXISTS_ARM64"
+        echo "Unified tag: $TAG"
+        echo "exists: $EXISTS"
 
         # Outputs
         echo "helium_ver=$HELIUM_VER" >> $GITHUB_OUTPUT
@@ -67,37 +72,19 @@ jobs:
         echo "plus_url=$PLUS_URL" >> $GITHUB_OUTPUT
         echo "helium_url_x64=$HELIUM_URL_X64" >> $GITHUB_OUTPUT
         echo "helium_url_arm64=$HELIUM_URL_ARM64" >> $GITHUB_OUTPUT
-        echo "exists_x64=$EXISTS_X64" >> $GITHUB_OUTPUT
-        echo "exists_arm64=$EXISTS_ARM64" >> $GITHUB_OUTPUT
+        echo "exists=$EXISTS" >> $GITHUB_OUTPUT
 
   build:
     needs: check
-    if: |
-      (needs.check.outputs.exists_x64 == 'false') ||
-      (needs.check.outputs.exists_arm64 == 'false')
+    if: needs.check.outputs.exists == 'false'
     runs-on: windows-latest
     strategy:
       matrix:
         arch: [x64, arm64]
     steps:
-    - name: Skip if already released
-      id: skip
-      run: |
-        if ("${{ matrix.arch }}" -eq "x64" -and "${{ needs.check.outputs.exists_x64 }}" -eq "true") {
-          echo "x64 release already exists — skipping"
-          echo "should_skip=true" >> $env:GITHUB_OUTPUT
-        } elseif ("${{ matrix.arch }}" -eq "arm64" -and "${{ needs.check.outputs.exists_arm64 }}" -eq "true") {
-          echo "arm64 release already exists — skipping"
-          echo "should_skip=true" >> $env:GITHUB_OUTPUT
-        } else {
-          echo "should_skip=false" >> $env:GITHUB_OUTPUT
-        }
-
     - uses: actions/checkout@v4
-      if: steps.skip.outputs.should_skip != 'true'
 
     - name: Build (${{ matrix.arch }})
-      if: steps.skip.outputs.should_skip != 'true'
       run: |
         $arch = "${{ matrix.arch }}"
         $heliumVer = "${{ needs.check.outputs.helium_ver }}"
@@ -174,16 +161,28 @@ jobs:
         Compress-Archive Helium_Portable "$tag.zip" -Force
 
         echo "ZIP=$tag.zip" >> $env:GITHUB_ENV
-        echo "TAG=$tag" >> $env:GITHUB_ENV
-        echo "ARCH=$arch" >> $env:GITHUB_ENV
 
-    - name: Release
-      if: steps.skip.outputs.should_skip != 'true'
-      uses: softprops/action-gh-release@v2
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
       with:
-        files: ${{ env.ZIP }}
-        tag_name: ${{ env.TAG }}
-        name: Helium ${{ needs.check.outputs.helium_ver }} + Chrome++ ${{ needs.check.outputs.plus_ver }} (${{ matrix.arch }})
+        name: zip-${{ matrix.arch }}
+        path: ${{ env.ZIP }}
+        if-no-files-found: error
+
+  release:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: zip-*
+        merge-multiple: true
+
+    - uses: softprops/action-gh-release@v2
+      with:
+        files: helium-portable-*.zip
+        tag_name: helium-portable_${{ needs.check.outputs.helium_ver }}_${{ needs.check.outputs.plus_ver }}
+        name: Helium ${{ needs.check.outputs.helium_ver }} + Chrome++ ${{ needs.check.outputs.plus_ver }}
         overwrite: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
