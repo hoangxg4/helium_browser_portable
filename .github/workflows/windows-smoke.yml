@@ -33,13 +33,15 @@ jobs:
         shell: pwsh
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      SMOKE: ${{ runner.temp }}/smoke
       PROBE_B64: PCFkb2N0eXBlIGh0bWw+PG1ldGEgY2hhcnNldD11dGYtOD48dGl0bGU+cHJvYmU8L3RpdGxlPjxwcmUgaWQ9bz5wZW5kaW5nPC9wcmU+CjxzY3JpcHQ+CmNvbnN0IG89ZG9jdW1lbnQuZ2V0RWxlbWVudEJ5SWQoJ28nKTsKdHJ5ewpuYXZpZ2F0b3IucmVxdWVzdE1lZGlhS2V5U3lzdGVtQWNjZXNzKCdjb20ud2lkZXZpbmUuYWxwaGEnLFt7CiAgdmlkZW9DYXBhYmlsaXRpZXM6W3tjb250ZW50VHlwZTondmlkZW8vbXA0OyBjb2RlY3M9ImF2YzEuNDJFMDFFIid9XSwKICBhdWRpb0NhcGFiaWxpdGllczpbe2NvbnRlbnRUeXBlOidhdWRpby9tcDQ7IGNvZGVjcz0ibXA0YS40MC4yIid9XQp9XSkudGhlbihmdW5jdGlvbigpe28udGV4dENvbnRlbnQ9J0NETV9PSyc7ZG9jdW1lbnQudGl0bGU9J0NETV9PSyc7fSkKLmNhdGNoKGZ1bmN0aW9uKGUpe28udGV4dENvbnRlbnQ9J0NETV9GQUlMOicrZS5uYW1lKyc6JytlLm1lc3NhZ2U7ZG9jdW1lbnQudGl0bGU9J0NETV9GQUlMJzt9KTsKfWNhdGNoKGUpe28udGV4dENvbnRlbnQ9J0NETV9USFJPVzonK2UubmFtZTtkb2N1bWVudC50aXRsZT0nQ0RNX1RIUk9XJzt9Cjwvc2NyaXB0Pgo=
 
     steps:
       - name: Resolve latest unified release
         id: rel
         run: |
+          # runner context is not available in job-level env; export at runtime.
+          $env:SMOKE = Join-Path $env:RUNNER_TEMP 'smoke'
+          "SMOKE=$env:SMOKE" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = "application/vnd.github+json" }
           $r = Invoke-RestMethod -Headers $h "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/latest"
           if ($r.tag_name -notmatch '^helium-portable_\d') { throw "latest release is not a unified tag: $($r.tag_name)" }
