@@ -48,7 +48,9 @@ Repo layout: `build-yandex.ps1` (extractor — runs in CI and locally),
 ## 3. Builder stages (`build-yandex.ps1`, idempotent)
 
 1. **Resolve source** — `-Installer <path>` (user-supplied) or `-Download` (CI, public
-   URL); verify version string from the binary.
+   URL); the winget `PackageVersion` is the **sole source of truth** for the release tag,
+   the zip name and `version.txt` — the version string read back from the binary is a
+   log-only cross-check, never the value we publish.
 2. **Extract** — two detection branches: outer exe resource archive, or post-silent-install
    `Installer\browser.7z`; hard-fail with a clear message when neither matches.
 3. **Layout** — output `Yandex_Portable\{Yandex\..., Data\, Cache\}`; patch `chrome++.ini`
@@ -65,7 +67,7 @@ Repo layout: `build-yandex.ps1` (extractor — runs in CI and locally),
 
 `StatisticsReporting=0`, `CrashesReporting=0`, `BackgroundModeEnabled=0`,
 `YandexAutoLaunchMode=never`, `YandexAliceMsgDisable=1`, `NeuroNtpTools=0`,
-`NtpNotificationsDisable=0`, `YandexButtonDisable=1`, `SearchSuggestEnabled=0`,
+`NtpNotificationsDisable=1`, `YandexButtonDisable=1`, `SearchSuggestEnabled=0`,
 `UpdateAllowed=0`, `BackgroundUpdateAllowed=0`.
 
 **Never disable (documented in reg comments + enforced by validate pins):**
@@ -101,7 +103,10 @@ Single `spike.yml` (workflow_dispatch, windows-latest) answering, with log evide
    probe (title/pre anchored parsing, as in Helium) to establish Widevine works before
    any debloat touches component settings.
 
-If (1) or (2) fails hard, stop and re-plan with the owner — do not build on assumptions.
+**Stop rules** (plan decision rules): stop and re-plan with the owner only if (3) finds
+no working extract branch, or (2) measures `IGNORED` on the consumer build — do not build
+on assumptions. A failure of (1) is **not** a stop: it switches implementation to the
+designed `--user-data-dir` launcher fallback (Tensionix precedent, above).
 
 ## 6. Risks
 
