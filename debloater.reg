@@ -1,139 +1,40 @@
 Windows Registry Editor Version 5.00
 
-; Reset to defaults
-[-HKLM\SOFTWARE\Policies\Helium]
+; Yandex Browser Portable — safe-first debloat set (exactly 11 values).
+; Branch: HKLM\SOFTWARE\Policies\YandexBrowser (Yandex ignores the Chromium policy branch).
+; Honored by the consumer build: spike P3 headed run H5 lists these as
+; source=Platform, level=Mandatory on chrome://policy.
+; Requires admin (double-click, or: reg import debloater.reg).
 
-; Configuration
-[HKLM\SOFTWARE\Policies\Helium]
-
-; Disable AI features
-"GeminiSettings"=dword:00000001
-"GenAILocalFoundationalModelSettings"=dword:00000001
-"AutofillPredictionSettings"=dword:00000002
-"HelpMeWriteSettings"=dword:00000002
-"AIModeSettings"=dword:00000001
-
-; Disable Access Code Cast
-"AccessCodeCastEnabled"=dword:00000000
-
-; Disable Image Labels for accessibility
-"AccessibilityImageLabelsEnabled"=dword:00000000
-
-; Disable Alternate Error Pages
-"AlternateErrorPagesEnabled"=dword:00000000
-
-; Disable password leak alerts
-"PasswordDismissCompromisedAlertEnabled"=dword:00000000
-
-; Disable password protection warning
-"PasswordProtectionWarningTrigger"=dword:00000000
-
-; Disable QR Code Generator
-"QRCodeGeneratorEnabled"=dword:00000000
-
-; Disable Remote Debugging
-"RemoteDebuggingAllowed"=dword:00000000
-
-; Disable Roaming Profile Support
-"RoamingProfileSupportEnabled"=dword:00000000
-
-; Disable Safe Browsing Deep Scanning
-"SafeBrowsingDeepScanningEnabled"=dword:00000000
-
-; Disable Safe Browsing Proxied Real Time Checks
-"SafeBrowsingProxiedRealTimeChecksAllowed"=dword:00000000
-
-; Disable Safe Browsing Surveys
-"SafeBrowsingSurveysEnabled"=dword:00000000
-
-; Disable Shopping List
-"ShoppingListEnabled"=dword:00000000
-
-; Disable Side Search
-"SideSearchEnabled"=dword:00000000
-
-; Disable Sign-in Interception
-"SigninInterceptionEnabled"=dword:00000000
-
-; Disable User Feedback
-"UserFeedbackAllowed"=dword:00000000
-"FeedbackSurveysEnabled"=dword:00000000
-
-; Disable URL-keyed anonymized data collection
-"UrlKeyedAnonymizedDataCollectionEnabled"=dword:00000000
-
-; Enable Search Suggestions
-"SearchSuggestEnabled"=dword:00000001
-
-; Disable Autofill and password manager
-"AutofillAddressEnabled"=dword:00000000
-"AutofillCreditCardEnabled"=dword:00000000
-"PasswordManagerEnabled"=dword:00000000
-
-; Disable payment method query
-"PaymentMethodQueryEnabled"=dword:00000000
-
-; Disable background apps
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\YandexBrowser]
+; StatisticsReporting=0 — do not send usage statistics to Yandex
+"StatisticsReporting"=dword:00000000
+; CrashesReporting=0 — do not upload crash reports
+"CrashesReporting"=dword:00000000
+; BackgroundModeEnabled=0 — no background/tray process after the last window closes
 "BackgroundModeEnabled"=dword:00000000
+; YandexAutoLaunchMode=2 — never: do not start the browser with Windows
+;   (enum per design §3; spike P3 evidence: ADMX ships no YandexAutoLaunchMode entry)
+"YandexAutoLaunchMode"=dword:00000002
+; YandexAliceMsgDisable=1 — no Alice assistant prompts/messages
+"YandexAliceMsgDisable"=dword:00000001
+; NeuroNtpTools=0 — no neural/AI widgets on the new tab page
+"NeuroNtpTools"=dword:00000000
+; NtpNotificationsDisable=1 — no notifications on the new tab page (1 = disabled)
+"NtpNotificationsDisable"=dword:00000001
+; YandexButtonDisable=1 — no Yandex button/shortcut clutter in the UI
+"YandexButtonDisable"=dword:00000001
+; SearchSuggestEnabled=0 — no search suggestions (no network calls while typing)
+"SearchSuggestEnabled"=dword:00000000
+; UpdateAllowed=0 — stops browser self-update. Security rationale: the portable tree is
+;   replaced deliberately from this repo's releases (version.txt = winget PackageVersion),
+;   so patches arrive as reviewed re-installs instead of an unattended in-place overwrite.
+;   Component/security updates stay enabled — see the 3-don't-touch list below.
+"UpdateAllowed"=dword:00000000
+; BackgroundUpdateAllowed=0 — no silent background update downloads
+"BackgroundUpdateAllowed"=dword:00000000
 
-; Disable Privacy Sandbox prompts
-"PrivacySandboxPromptEnabled"=dword:00000000
-
-; Disable Spellcheck
-"SpellcheckEnabled"=dword:00000000
-
-; Disable Safe Browsing Extended Reporting
-"SafeBrowsingExtendedReportingEnabled"=dword:00000000
-
-; Show full URLs in address bar
-"ShowFullUrlsInAddressBar"=dword:00000001
-
-; Block geolocation on all sites
-"DefaultGeolocationSetting"=dword:00000002
-
-; Block notifications on all sites
-"DefaultNotificationsSetting"=dword:00000002
-
-; Block motion sensors
-"DefaultSensorsSetting"=dword:00000002
-
-; Block third-party cookies
-"BlockThirdPartyCookies"=dword:00000001
-
-; Safe Browsing Standard protection
-"SafeBrowsingProtectionLevel"=dword:00000001
-
-; Disable password leak detection
-"PasswordLeakDetectionEnabled"=dword:00000000
-
-; Enable Memory Saver
-"HighEfficiencyModeEnabled"=dword:00000001
-
-; Memory Saver Balanced
-"MemorySaverModeSavings"=dword:00000001
-
-; Enable Preload pages
-"NetworkPredictionOptions"=dword:00000003
-
-; Enable hardware acceleration
-"HardwareAccelerationModeEnabled"=dword:00000001
-
-; Prevent WebRTC IP leaks
-"WebRtcIPHandling"="disable_non_proxied_udp"
-
-; Always use HTTPS
-"HttpsUpgradesEnabled"=dword:00000001
-"HttpsOnlyMode"="force_enabled"
-
-; Disable default browser check
-"DefaultBrowserSettingEnabled"=dword:00000000
-
-; Disable spell check service
-"SpellCheckServiceEnabled"=dword:00000000
-
-; Disable automatic updates
-"UpdateDefault"=dword:00000000
-"AutoUpdateCheckPeriodMinutes"=dword:00000000
-
-; Disable component updates
-"ComponentUpdatesEnabled"=dword:00000000
+; NEVER disable here (3-don't-touch):
+;   SafeBrowsingProtectionLevel — phishing/malware protection
+;   ComponentUpdatesEnabled / --disable-component-update — Widevine/DRM breaks
+;   security updates beyond UpdateAllowed rationale

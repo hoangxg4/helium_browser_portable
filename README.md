@@ -1,51 +1,101 @@
-# Helium Portable
+# Yandex Browser Portable
 
-Helium Browser Portable - Chromium-based browser by [imputnet](https://github.com/imputnet/helium-windows), packaged as a portable version with Chrome++ for local data storage and debloating.
+A self-contained, debloated, **portable Yandex Browser**: no installer, no background
+service, no self-update — profile and cache live next to the app, so the whole package is
+a folder you can move, copy or delete.
+
+Built in CI from the official public `Yandex.exe` payload and wrapped with Chrome++
+(`version.dll`) so `Data\` and `Cache\` stay at the package root. Design:
+[`docs/plans/2026-09-27-yandex-browser-portable-design.md`](docs/plans/2026-09-27-yandex-browser-portable-design.md)
+(origin: https://github.com/hoangxg4/helium_browser_portable/issues/8).
 
 ### Features
-- Helium Portable with all data stored locally, no installation required
-- Chrome++ integration for portable data directory and cache
-- Debloated with privacy-focused policies (disabled AI, tracking, telemetry)
-- Widevine CDM support for DRM content
-- Auto-update script to fetch latest Helium releases
 
-### Downloads
-Releases are published **per version pair** on the [Releases page](https://github.com/hoangxg4/helium_browser_portable/releases):
-- One release per Helium + Chrome++ combination, tagged `helium-portable_{Helium}_{Chrome++}` (e.g. `helium-portable_0.18.1.1_1.18.2`), containing both arch zips when both were built:
-  - `helium-portable-x64_{Helium}_{Chrome++}.zip` — Intel/AMD 64-bit
-  - `helium-portable-arm64_{Helium}_{Chrome++}.zip` — ARM64
-- Grab the newest pair; pick the zip matching your CPU
-- Older per-arch releases (`helium-portable-x64_...` / `helium-portable-arm64_...` tags) are retained alongside for history
+- Portable: everything under one folder, nothing written outside it
+- Safe-first debloat: exactly 11 documented policies, every one verifiable on `chrome://policy`
+- Telemetry, crash reporting, background mode, auto-start, Alice prompts, AI new-tab tools
+  and search suggestions disabled
+- Updater stripped; version is pinned in `version.txt` and refreshed by `update.bat`
+- Widevine/DRM and SafeBrowsing deliberately left untouched
 
-### Layout
+## Accepted EULA risk (read this)
+
+Yandex's browser agreement (§4.1/§4.2, https://yandex.ru/legal/browser_agreement/en/)
+prohibits redistributing modified builds. The owner accepted this risk on 2026-09-27:
+releases are published from this repository's CI and **if Yandex objects, only the
+releases are taken down — no code impact**. You are responsible for complying with the
+agreement in your jurisdiction.
+
+## Layout
+
 ```
-Helium_Portable/
-├── Helium/                     browser + fixed files (scripts, config, CDM)
-│   ├── chrome.exe
-│   ├── version.dll, chrome++.ini
-│   ├── update.bat
-│   ├── default-apps-multi-profile.bat
-│   ├── bypass_windows_defender.bat
-│   ├── debloater.reg
-│   ├── version.txt
-│   └── WidevineCdm/
-├── Data/                       runtime profile (created on first run)
-└── Cache/                      runtime cache (created on first run)
+yandex-portable_<ver>/
+├── build-yandex.ps1        builder/extractor (also kept at package root)
+├── chrome++.ini            Chrome++ config: Data\ and Cache\ at package root
+├── debloater.reg           11 safe-first policies (HKLM\SOFTWARE\Policies\YandexBrowser)
+├── update.bat              updater (re-installs from GitHub Releases)
+├── version.txt             version = winget PackageVersion (sole source of truth)
+├── Yandex/                 browser tree
+│   ├── browser.exe         entry point (NOT chrome.exe)
+│   ├── version.dll         Chrome++ launcher (or launch.bat fallback — spike P2)
+│   └── WidevineCdm/        flat exe-dir CDM path, only if the CDM was shipped/registered
+├── Data/                   profile (created on first run)
+└── Cache/                  cache (created on first run)
 ```
 
-### Files (inside `Helium/`)
-- `chrome++.ini` — Chrome++ configuration (data at `../Data`, cache at `../Cache`)
-- `debloater.reg` — Disable unnecessary Chromium features
-- `default-apps-multi-profile.bat` — Set Helium as default browser
-- `update.bat` — Auto-update to the latest Helium release
-- `bypass_windows_defender.bat` — Add/remove Windows Defender exclusion for the whole portable folder
+## Usage
 
-### Usage
-1. Download the latest release zip
-2. Extract to any folder
-3. Run `Helium\chrome.exe` to start
+1. Download the latest release zip and extract it anywhere (no admin needed to extract).
+2. Start `Yandex\browser.exe`.
 
-### Update from the old (flat) layout
-1. Extract the new zip to a fresh folder
-2. Copy `Data\` and `Cache\` from the old folder into the new folder's root (paths are unchanged — nothing else to migrate)
-3. Run `Helium\chrome.exe`; re-run `Helium\default-apps-multi-profile.bat` if you had registered default-browser shortcuts
+### Applying the debloat policies
+
+`debloater.reg` writes to `HKLM\SOFTWARE\Policies\YandexBrowser`, which is a
+machine-wide (HKLM) key:
+
+- **With admin rights** — double-click `debloater.reg` and confirm, or from an
+  elevated prompt run `reg import debloater.reg`. Verify afterwards on
+  `chrome://policy`: each key shows `source = Platform`, `level = Mandatory`
+  (proven in spike P3, headed run H5).
+- **Without admin rights** — the registry policies cannot be applied (HKLM write is
+  denied). The build's **preseeded preferences debloat still applies automatically**
+  from `Data\` (`Local State` / `Default\Preferences` + `First Run` sentinel), so the
+  no-admin install is debloated too, just through prefs instead of policies.
+
+> Note: CI's smoke job runs `reg import debloater.reg` only to prove the file parses;
+> it **never applies policies to end users** — applying them is your explicit step.
+
+### Debloat set (11 keys)
+
+`StatisticsReporting=0`, `CrashesReporting=0`, `BackgroundModeEnabled=0`,
+`YandexAutoLaunchMode=2 (never)`, `YandexAliceMsgDisable=1`, `NeuroNtpTools=0`,
+`NtpNotificationsDisable=1`, `YandexButtonDisable=1`, `SearchSuggestEnabled=0`,
+`UpdateAllowed=0`, `BackgroundUpdateAllowed=0`.
+
+### 3-don't-touch (never disabled here)
+
+- `SafeBrowsingProtectionLevel` — phishing/malware protection stays on
+- `ComponentUpdatesEnabled` / `--disable-component-update` — disabling breaks Widevine/DRM
+- Security updates beyond the `UpdateAllowed` rationale — `UpdateAllowed=0` only stops the
+  browser overwriting this portable tree in place; you re-install deliberately from the
+  releases (pinned by `version.txt`). Component updates keep running.
+
+These are pinned by `.github/workflows/validate.yml`.
+
+## State CA note
+
+**We bundle no certificates** — no state CA, no custom roots, nothing added to the trust
+store. If you want to trust an extra CA (corporate proxy, national root), do it yourself
+and know the risk (see nixpkgs `knownVulnerabilities` for why shipping state roots is a
+bad default).
+
+## Update
+
+Run `update.bat` — it fetches the latest official release of this package, stops
+`browser.exe`, copies over the protected files (`chrome++.ini`, `update.bat`,
+`debloater.reg`, `Data\`, `Cache\`), re-applies policies and re-checks EME/Widevine.
+
+## Building
+
+`build-yandex.ps1` is the CI/local builder (currently a stub — extraction, layout,
+debloat seeding and updater stripping land in Tasks 3–5). CI: `.github/workflows/`.

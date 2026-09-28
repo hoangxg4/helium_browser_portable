@@ -2,179 +2,109 @@ name: Validate
 
 on:
   push:
-    branches: [master]
-    paths-ignore:
-      - '**.md'
   pull_request:
-    branches: [master]
-  workflow_dispatch:
 
 jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Validate JSON
-      run: |
-        echo "==> Checking WidevineCdm/manifest.json"
-        jq '.' WidevineCdm/manifest.json > /dev/null && echo "  OK" || { echo "  INVALID JSON"; exit 1; }
-
-        # Check required fields
-        VER=$(jq -r '.version' WidevineCdm/manifest.json)
-        echo "  WidevineCdm version: $VER"
-        [ -n "$VER" ] && [ "$VER" != "null" ] || { echo "  ERROR: missing version"; exit 1; }
-
-        PLAT=$(jq -r '.platforms[0].sub_package_path' WidevineCdm/manifest.json)
-        echo "  Platform path: $PLAT"
-        [ -d "WidevineCdm/$PLAT" ] || { echo "  WARNING: platform dir not found (may be normal if only x64)"; }
-
-        echo ""
-        echo "==> Checking WidevineCdm DLL"
-        for dll in WidevineCdm/_platform_specific/*/widevinecdm.dll; do
-          if [ -f "$dll" ]; then
-            echo "  OK: $dll ($(du -h "$dll" | cut -f1))"
-          fi
-        done
-
-    - name: Validate registry file
-      run: |
-        echo "==> Checking debloater.reg"
-        # Check header
-        head -1 debloater.reg | grep -q "Windows Registry Editor" || { echo "  ERROR: missing reg header"; exit 1; }
-        echo "  Header: OK"
-
-        # Check no remaining Chromium references (should all be Helium)
-        if grep -i "\\\\Chromium" debloater.reg; then
-          echo "  WARNING: found 'Chromium' reference — should be 'Helium'"
-        else
-          echo "  Policy key: Helium OK"
-        fi
-
-        # Count policies
-        COUNT=$(grep -c '^"' debloater.reg || true)
-        echo "  Policy count: $COUNT"
-
-    - name: Validate chrome++.ini
-      run: |
-        echo "==> Checking chrome++.ini"
-        # Check required sections
-        grep -q '^\[general\]' chrome++.ini || { echo "  ERROR: missing [general]"; exit 1; }
-        grep -q 'data_dir=' chrome++.ini || { echo "  ERROR: missing data_dir"; exit 1; }
-        grep -q 'cache_dir=' chrome++.ini || { echo "  ERROR: missing cache_dir"; exit 1; }
-        grep -q 'command_line=' chrome++.ini || { echo "  ERROR: missing command_line"; exit 1; }
-
-        # hibbiki-style layout: %app% = Helium\, so ..\ escapes to the portable
-        # root where Data/Cache must live. This check used to reject '..\' —
-        # the restructure inverted the requirement (spec section 7).
-        grep -qF 'data_dir=%app%\..\Data' chrome++.ini || { echo "  ERROR: data_dir must be %app%\..\Data"; exit 1; }
-        grep -qF 'cache_dir=%app%\..\Cache' chrome++.ini || { echo "  ERROR: cache_dir must be %app%\..\Cache"; exit 1; }
-        if grep -qF 'data_dir=%app%\Data' chrome++.ini; then
-          echo "  ERROR: old flat data_dir=%app%\Data present"
-          exit 1
-        fi
-        grep -qF 'policy_key=Portable' chrome++.ini || { echo "  ERROR: missing policy_key=Portable"; exit 1; }
-        echo "  Paths: OK (data/cache at portable root)"
-
-        echo "  command_line: $(grep 'command_line=' chrome++.ini | sed 's/command_line=//')"
-
-    - name: Validate update.bat
-      run: |
-        echo "==> Checking update.bat"
-        # Check version banner exists
-        grep -q "Helium Portable Updater" update.bat || echo "  WARNING: version banner not found"
-
-        # Check PowerShell extraction line count
-        BATCH_LINES=$(sed -n '1,/^exit \/b$/p' update.bat | wc -l)
-        SKIP_NUM=$(grep "Select-Object -Skip" update.bat | grep -oP '\d+')
-        echo "  Batch preamble lines: $BATCH_LINES (Skip: $SKIP_NUM)"
-        if [ "$BATCH_LINES" != "$SKIP_NUM" ]; then
-          echo "  WARNING: Skip count ($SKIP_NUM) doesn't match batch lines ($BATCH_LINES)"
-          echo "  The PowerShell extraction may be broken!"
-        else
-          echo "  Extraction: OK (Skip=$SKIP_NUM matches $BATCH_LINES batch lines)"
-        fi
-
-        # Check API URL has per_page
-        grep -q "per_page=" update.bat && echo "  API pagination: OK (per_page present)" || echo "  WARNING: missing per_page — may miss releases"
-
-        # Check protected paths
-        grep -q "WidevineCdm" update.bat && echo "  WidevineCdm protected: OK" || echo "  WARNING: WidevineCdm not in protected list"
-
-        # Check component update flag
-        grep -q "component-update" update.bat && echo "  component-update: OK" || true
-
-        # Check architecture auto-detection
-        if grep -q 'PROCESSOR_ARCHITECTURE' update.bat; then
-          echo "  Arch detection: OK"
-        else
-          echo "  WARNING: no architecture auto-detection"
-        fi
-
-        # Check arch-aware download URL
-        grep -q 'arch.*windows.zip' update.bat && echo "  Arch-aware download: OK" || echo "  WARNING: may only support x64"
-
-    - name: Validate build workflow
-      run: |
-        echo "==> Checking main.yml"
-        # Check matrix strategy for multi-arch
-        grep -q "arch:" .github/workflows/main.yml && echo "  Matrix: OK (multi-arch)" || echo "  WARNING: no arch matrix"
-        grep -q "arm64" .github/workflows/main.yml && echo "  ARM64 support: OK" || echo "  WARNING: no ARM64"
-        grep -q "debloater.reg" .github/workflows/main.yml && echo "  debloater.reg included: OK" || echo "  WARNING: debloater.reg missing from build"
-
-        # Portable-data safety net: build must hard-fail when version.dll is
-        # missing AND assert it exists before packaging (issue #7 regression).
-        if grep -qF '\\\\App\\\\' .github/workflows/main.yml; then
-          echo "  ERROR: broken quadruple-backslash DLL regex found (never matches Windows paths)"
-          exit 1
-        fi
-        echo "  Broken backslash regex: absent OK"
-
-        grep -q 'version\.dll' .github/workflows/main.yml || { echo "  ERROR: main.yml does not reference version.dll"; exit 1; }
-        grep -q 'Test-Path "Helium_Portable\\Helium\\version\.dll"' .github/workflows/main.yml || { echo "  ERROR: missing pre-package version.dll assertion in main.yml"; exit 1; }
-        grep -q 'exit 1' .github/workflows/main.yml || { echo "  ERROR: main.yml has no hard-fail on missing version.dll"; exit 1; }
-        echo "  version.dll selection + assertion + hard-fail: OK"
-
-        # hibbiki-style layout: assembly must target Helium_Portable\Helium\
-        # with WidevineCdm at the FLAT Helium\WidevineCdm path — Chrome 154
-        # only registers the exe-dir flat location (windows-smoke run 36306584637).
-        grep -qF 'Helium_Portable\Helium' .github/workflows/main.yml || { echo "  ERROR: main.yml does not assemble into Helium_Portable\Helium"; exit 1; }
-        grep -qF 'Copy-Item WidevineCdm "Helium_Portable\Helium\"' .github/workflows/main.yml || { echo "  ERROR: WidevineCdm not copied to flat Helium\WidevineCdm"; exit 1; }
-        # Regression guard: versioned nesting must NOT come back (Chrome ignores it).
-        grep -qF '$heliumVer\WidevineCdm' .github/workflows/main.yml && { echo "  ERROR: WidevineCdm nested under version dir — Chrome ignores that path"; exit 1; }
-        echo "  hibbiki layout assembly: OK"
-
-        # Unified release scheme: one tag per version, single publish point
-        # (spec: docs/superpowers/specs/2026-09-26-unified-arch-release-design.md §3.5)
-        grep -qF 'TAG="helium-portable_${HELIUM_VER}_${PLUS_VER}"' .github/workflows/main.yml || { echo "  ERROR: check job does not build the unified release tag"; exit 1; }
-        grep -qE 'tag_name: helium-portable_\$\{\{' .github/workflows/main.yml || { echo "  ERROR: release job tag_name is not the unified scheme"; exit 1; }
-        grep -qF 'upload-artifact@v4' .github/workflows/main.yml || { echo "  ERROR: matrix builds must upload artifacts (no direct publish)"; exit 1; }
-        grep -qF 'needs: [check, build]' .github/workflows/main.yml || { echo "  ERROR: release job must gate on both check and build"; exit 1; }
-        SOFTPROPS_COUNT=$(grep -c 'action-gh-release' .github/workflows/main.yml || true)
-        [ "$SOFTPROPS_COUNT" -eq 1 ] || { echo "  ERROR: expected exactly 1 action-gh-release publish point, found $SOFTPROPS_COUNT"; exit 1; }
-        echo "  Unified release scheme: OK"
-
-    - name: Validate file structure
-      run: |
-        echo "==> Checking required files"
-        REQUIRED=(
-          "chrome++.ini"
-          "bypass_windows_defender.bat"
-          "debloater.reg"
-          "default-apps-multi-profile.bat"
-          "update.bat"
-          "README.md"
-          "WidevineCdm/manifest.json"
-          ".github/workflows/main.yml"
-          ".github/workflows/validate.yml"
-        )
-        ALL_OK=true
-        for f in "${REQUIRED[@]}"; do
-          if [ -f "$f" ] || [ -d "$f" ]; then
+      - name: Required files exist
+        run: |
+          echo "==> Required files"
+          for f in \
+            build-yandex.ps1 \
+            update.bat \
+            debloater.reg \
+            chrome++.ini \
+            README.md \
+            docs/plans/2026-09-27-yandex-browser-portable-design.md
+          do
+            if [ ! -f "$f" ]; then
+              echo "  MISSING: $f"
+              exit 1
+            fi
             echo "  OK: $f"
-          else
-            echo "  MISSING: $f"
-            ALL_OK=false
+          done
+
+      - name: Debloater has exactly the safe 11 policy keys
+        run: |
+          echo "==> debloater.reg: safe-11 keys"
+          # Per-key UpdateAllowed security rationale lives in the reg comments
+          # (review fix #22) — not in this workflow.
+          for key in \
+            StatisticsReporting \
+            CrashesReporting \
+            BackgroundModeEnabled \
+            YandexAutoLaunchMode \
+            YandexAliceMsgDisable \
+            NeuroNtpTools \
+            NtpNotificationsDisable \
+            YandexButtonDisable \
+            SearchSuggestEnabled \
+            UpdateAllowed \
+            BackgroundUpdateAllowed
+          do
+            if ! grep -qF "\"$key\"=dword" debloater.reg; then
+              echo "  MISSING key: $key"
+              exit 1
+            fi
+            echo "  OK: $key"
+          done
+          COUNT=$(grep -c 'dword' debloater.reg)
+          if [ "$COUNT" -ne 11 ]; then
+            echo "  ERROR: expected exactly 11 dword values, found $COUNT"
+            exit 1
           fi
-        done
-        [ "$ALL_OK" = true ] || { echo "Some required files are missing!"; exit 1; }
+          echo "  dword count: $COUNT"
+
+      - name: Never-touch guards
+        run: |
+          echo "==> 3-don't-touch guards"
+          if grep -qE '"(SafeBrowsingProtectionLevel|ComponentUpdatesEnabled)"=' debloater.reg; then
+            echo "  ERROR: forbidden security/DRM key present in debloater.reg"
+            exit 1
+          fi
+          if grep -q 'disable-component-update' chrome++.ini; then
+            echo "  ERROR: --disable-component-update must never ship (breaks Widevine/DRM)"
+            exit 1
+          fi
+          if grep -qF 'Policies\Chromium' debloater.reg; then
+            echo "  ERROR: Yandex reads Policies\YandexBrowser, not Policies\Chromium"
+            exit 1
+          fi
+          echo "  OK: no forbidden keys"
+
+      - name: chrome plus ini portability pins
+        run: |
+          echo "==> chrome++.ini pins"
+          if ! grep -qF 'data_dir=%app%\..\Data' chrome++.ini; then
+            echo "  ERROR: data_dir must be %app%\..\Data (portable root)"
+            exit 1
+          fi
+          if ! grep -qF 'cache_dir=%app%\..\Cache' chrome++.ini; then
+            echo "  ERROR: cache_dir must be %app%\..\Cache (portable root)"
+            exit 1
+          fi
+          echo "  Paths: OK"
+
+      - name: Debloater registry header
+        run: |
+          echo "==> debloater.reg header"
+          if ! grep -q 'Windows Registry Editor' debloater.reg; then
+            echo "  ERROR: missing Windows Registry Editor header"
+            exit 1
+          fi
+          echo "  Header: OK"
+
+      - name: Workflow files present
+        run: |
+          echo "==> Workflows"
+          # Only validate.yml is pinned here; build/smoke workflow pins are
+          # added later by Tasks 6/7 — do not pin them in this task.
+          if [ ! -f .github/workflows/validate.yml ]; then
+            echo "  MISSING: .github/workflows/validate.yml"
+            exit 1
+          fi
+          echo "  OK: .github/workflows/validate.yml"
