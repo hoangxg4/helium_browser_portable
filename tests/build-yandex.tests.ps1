@@ -1,4 +1,4 @@
-# tests/build-yandex.tests.ps1 — behavior tests for build-yandex.ps1 (Task 03)
+# tests/build-yandex.tests.ps1 — behavior tests for build-yandex.ps1 (Tasks 03-04)
 #
 # Run:  pwsh -NoProfile -File tests/build-yandex.tests.ps1
 # Needs: pwsh 7+, 7z (p7zip) in PATH. No network required (Chrome++ stage is
@@ -243,6 +243,84 @@ Assert ($src -match 'version\.txt') 'T12 source references version.txt'
 Assert ($src -match 'WidevineCdm') 'T12 source references WidevineCdm'
 Assert ($src -match 'service_update') 'T12 source references service_update'
 Assert ($src -notmatch 'disable-component-update') 'T12 source never contains --disable-component-update'
+
+Write-Host '== T13: profile preseed files (plan task 4) =='
+$preseed   = Join-Path $repoRoot 'preseed'
+$lsPre     = Join-Path $preseed 'Local State'
+$pfPre     = Join-Path $preseed 'Preferences'
+$frPre     = Join-Path $preseed 'First Run'
+Assert (Test-Path $lsPre) 'T13 preseed/Local State exists'
+Assert (Test-Path $pfPre) 'T13 preseed/Preferences exists'
+Assert (Test-Path $frPre) 'T13 preseed/First Run exists'
+if (Test-Path $frPre) {
+    Assert ((Get-Item $frPre).Length -eq 0) 'T13 preseed/First Run is empty (sentinel)'
+}
+$lsObj = $null
+if (Test-Path $lsPre) {
+    try {
+        $lsObj = Get-Content $lsPre -Raw | ConvertFrom-Json
+        Ok 'T13 preseed/Local State is valid JSON'
+    }
+    catch {
+        Fail "T13 preseed/Local State is not valid JSON: $($_.Exception.Message)"
+    }
+}
+if ($lsObj) {
+    Assert ($lsObj.browser.show_ya_button -eq $false) 'T13 Local State browser.show_ya_button = false'
+    Assert ($lsObj.browser.app_side_promo_service_enabled -eq $false) 'T13 Local State browser.app_side_promo_service_enabled = false'
+    $aliceOff = $false
+    if ($lsObj.alissenger -and ($lsObj.alissenger.PSObject.Properties.Name -contains 'alice_settings_visible')) {
+        $aliceOff = ($lsObj.alissenger.alice_settings_visible -eq $false)
+    }
+    Assert $aliceOff 'T13 Local State Alice flag off (alissenger.alice_settings_visible = false)'
+}
+$pfObj = $null
+if (Test-Path $pfPre) {
+    try {
+        $pfObj = Get-Content $pfPre -Raw | ConvertFrom-Json
+        Ok 'T13 preseed/Preferences is valid JSON'
+    }
+    catch {
+        Fail "T13 preseed/Preferences is not valid JSON: $($_.Exception.Message)"
+    }
+}
+if ($pfObj) {
+    $alOff = $false
+    if ($pfObj.alissenger -and ($pfObj.alissenger.PSObject.Properties.Name -contains 'enabled')) {
+        $alOff = ($pfObj.alissenger.enabled -eq $false)
+    }
+    Assert $alOff 'T13 Preferences alissenger.enabled = false'
+    $appsEmpty = $false
+    if ($pfObj.web_app -and ($pfObj.web_app.PSObject.Properties.Name -contains 'default_apps_installed')) {
+        $appsEmpty = (@($pfObj.web_app.default_apps_installed.PSObject.Properties).Count -eq 0)
+    }
+    Assert $appsEmpty 'T13 Preferences web_app.default_apps_installed is empty'
+    $pfJson = Get-Content $pfPre -Raw
+    Assert ($pfJson -notmatch 'yandex\.ru|mail\.ya|disk\.ya|telemost') 'T13 Preferences carries no default-app URLs / PII'
+}
+
+Write-Host '== T14: builder stage copies preseed into output =='
+$out13 = Join-Path $work 'out13'
+$r13 = Invoke-Builder @('-Installer', $fixA, '-Version', $Version, '-OutDir', $out13, '-ChromePlusUrl', $fixCpp)
+Assert ($r13.ExitCode -eq 0) "T14 builder exits 0 (got $($r13.ExitCode))"
+$lsOut = Join-Path $out13 'Data/Local State'
+$pfOut = Join-Path $out13 'Data/Default/Preferences'
+$frOut = Join-Path $out13 'Data/First Run'
+Assert (Test-Path $lsOut) 'T14 Data\Local State seeded from preseed/'
+Assert (Test-Path $pfOut) 'T14 Data\Default\Preferences seeded from preseed/'
+Assert (Test-Path $frOut) 'T14 Data\First Run sentinel seeded'
+if ((Test-Path $lsOut) -and (Test-Path $lsPre)) {
+    Assert (((Get-Content $lsOut -Raw).Trim()) -eq ((Get-Content $lsPre -Raw).Trim())) 'T14 Data\Local State content matches preseed source'
+}
+if ((Test-Path $pfOut) -and (Test-Path $pfPre)) {
+    Assert (((Get-Content $pfOut -Raw).Trim()) -eq ((Get-Content $pfPre -Raw).Trim())) 'T14 Data\Default\Preferences content matches preseed source'
+}
+if (Test-Path $frOut) {
+    Assert ((Get-Item $frOut).Length -eq 0) 'T14 Data\First Run is an empty sentinel'
+}
+Assert (Test-Path (Join-Path $out13 'preseed/Local State')) 'T14 preseed\ shipped at package root (self-contained rebuild)'
+Assert ($r13.Output -match 'preseed') 'T14 preseed stage logged'
+Assert ((Select-String -Path $builder -Pattern 'preseed' -Quiet) -eq $true) 'T14 build-yandex.ps1 references preseed (plan Verify grep)'
 
 # ------------------------------------------------------------------ report --
 

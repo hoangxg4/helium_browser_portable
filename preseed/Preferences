@@ -1,0 +1,9 @@
+{
+  "alissenger": {
+    "alice_settings_visible": false,
+    "enabled": false
+  },
+  "web_app": {
+    "default_apps_installed": {}
+  }
+}

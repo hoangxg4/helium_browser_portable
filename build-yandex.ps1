@@ -32,10 +32,14 @@ param(
                            from the exe-dir flat path), place Chrome++ version.dll
                            next to browser.exe with a launch.bat --user-data-dir
                            fallback (spike P2/P2b), then write layout-manifest.txt.
-      4. Debloat         — TODO(Task 5): merge debloater.reg into
-                           HKLM\SOFTWARE\Policies\YandexBrowser + preseed Local
-                           State / Default\Preferences with an empty "First Run"
-                           sentinel.
+      4. Debloat         — profile preseed: copy preseed/Local State ->
+                           Data\Local State, preseed/Preferences ->
+                           Data\Default\Preferences, empty "First Run" sentinel
+                           -> Data\ (prefs-only path, works without admin —
+                           review fix #10; without the sentinel Yandex discards
+                           hand-made profile files). debloater.reg itself is
+                           applied outside this builder (admin import / CI
+                           smoke validation).
       5. Strip updater   — remove service_update.exe / yupdate-exec.exe;
                            UpdateAllowed=0 and BackgroundUpdateAllowed=0 are already
                            carried by debloater.reg.
@@ -330,6 +334,34 @@ try {
         [IO.File]::WriteAllText((Join-Path $OutDir 'launch.bat'), $launchBody)
         Write-Host 'stage 3: version.dll unavailable — wrote launch.bat fallback (--user-data-dir launcher)'
     }
+
+    # ------------------------------------------------ stage 4: profile preseed
+    # Prefs-only debloat path (review fix #10) — no admin rights needed. The
+    # empty "First Run" sentinel must ship with the JSON, otherwise Yandex
+    # treats hand-made profile files as corrupted and regenerates defaults.
+    $preseedSrc   = Join-Path $PSScriptRoot 'preseed'
+    $preseedFiles = @('Local State', 'Preferences', 'First Run')
+    foreach ($pf in $preseedFiles) {
+        $pfPath = Join-Path $preseedSrc $pf
+        if (-not (Test-Path -LiteralPath $pfPath)) {
+            Write-Error "stage 4: missing preseed file: $pfPath"
+            exit 1
+        }
+    }
+    $dataDir    = Join-Path $OutDir 'Data'
+    $defaultDir = Join-Path $dataDir 'Default'
+    New-Item -ItemType Directory -Path $defaultDir -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $preseedSrc 'Local State') -Destination (Join-Path $dataDir 'Local State') -Force
+    Copy-Item -LiteralPath (Join-Path $preseedSrc 'Preferences') -Destination (Join-Path $defaultDir 'Preferences') -Force
+    Copy-Item -LiteralPath (Join-Path $preseedSrc 'First Run') -Destination (Join-Path $dataDir 'First Run') -Force
+    # Ship the preseed sources next to this script at the package root so
+    # update.bat-triggered rebuilds ($APP_DIR\..\build-yandex.ps1) stay self-contained.
+    $preseedOut = Join-Path $OutDir 'preseed'
+    New-Item -ItemType Directory -Path $preseedOut -Force | Out-Null
+    foreach ($pf in $preseedFiles) {
+        Copy-Item -LiteralPath (Join-Path $preseedSrc $pf) -Destination $preseedOut -Force
+    }
+    Write-Host 'stage 4: preseed applied -> Data\Local State, Data\Default\Preferences, Data\First Run (source preseed\ shipped at package root)'
 
     # -------------------------------------------------- stage 5: strip updater
     foreach ($updater in 'service_update.exe', 'yupdate-exec.exe') {

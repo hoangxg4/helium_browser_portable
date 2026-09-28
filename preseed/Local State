@@ -1,0 +1,9 @@
+{
+  "alissenger": {
+    "alice_settings_visible": false
+  },
+  "browser": {
+    "app_side_promo_service_enabled": false,
+    "show_ya_button": false
+  }
+}
