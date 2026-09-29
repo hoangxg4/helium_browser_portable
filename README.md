@@ -1,13 +1,22 @@
 # Yandex Browser Portable
 
+[![Validate](https://github.com/hcdbp24c3/yandex-browser-portable/actions/workflows/validate.yml/badge.svg)](https://github.com/hcdbp24c3/yandex-browser-portable/actions/workflows/validate.yml)
+[![Build](https://github.com/hcdbp24c3/yandex-browser-portable/actions/workflows/build.yml/badge.svg)](https://github.com/hcdbp24c3/yandex-browser-portable/actions/workflows/build.yml)
+[![Smoke](https://github.com/hcdbp24c3/yandex-browser-portable/actions/workflows/smoke.yml/badge.svg)](https://github.com/hcdbp24c3/yandex-browser-portable/actions/workflows/smoke.yml)
+
 A self-contained, debloated, **portable Yandex Browser**: no installer, no background
 service, no self-update — profile and cache live next to the app, so the whole package is
 a folder you can move, copy or delete.
 
 Built in CI from the official public `Yandex.exe` payload and wrapped with Chrome++
-(`version.dll`) so `Data\` and `Cache\` stay at the package root. Design:
-[`docs/plans/2026-09-27-yandex-browser-portable-design.md`](docs/plans/2026-09-27-yandex-browser-portable-design.md)
-(origin: https://github.com/hoangxg4/helium_browser_portable/issues/8).
+(`version.dll`) so `Data\` and `Cache\` stay at the package root.
+
+**Docs**: [design](docs/plans/2026-09-27-yandex-browser-portable-design.md) ·
+[spike findings](docs/spike-findings.md) ·
+[issue #8 status](docs/2026-09-27-issue8-status.md) ·
+[releases](https://github.com/hcdbp24c3/yandex-browser-portable/releases/latest)
+
+Origin: https://github.com/hoangxg4/helium_browser_portable/issues/8
 
 ### Features
 
@@ -45,7 +54,10 @@ yandex-portable_<ver>/
 
 ## Usage
 
-1. Download the latest release zip and extract it anywhere (no admin needed to extract).
+1. Download the latest release zip from
+   [Releases](https://github.com/hcdbp24c3/yandex-browser-portable/releases/latest)
+   (`yandex-portable_<ver>.zip`, currently **26.8.4.893**) and extract it anywhere
+   (no admin needed to extract).
 2. Start `Yandex\browser.exe`.
 
 ### Applying the debloat policies
@@ -93,9 +105,25 @@ bad default).
 
 Run `update.bat` — it fetches the latest official release of this package, stops
 `browser.exe`, copies over the protected files (`chrome++.ini`, `update.bat`,
-`debloater.reg`, `Data\`, `Cache\`), re-applies policies and re-checks EME/Widevine.
+`debloater.reg`, `version.txt` — `Data\` and `Cache\` are never touched), migrates a
+versioned `WidevineCdm` folder to the flat exe-dir path, re-applies policies and
+re-checks EME/Widevine.
 
 ## Building
 
-`build-yandex.ps1` is the CI/local builder (currently a stub — extraction, layout,
-debloat seeding and updater stripping land in Tasks 3–5). CI: `.github/workflows/`.
+`build-yandex.ps1` is the CI/local builder: it extracts the official `Yandex.exe`
+payload (7z branch, silent-install fallback), lays out the package, seeds the
+preseeded profile, strips the self-updater and writes `layout-manifest.txt`. It ships
+at the package root so `update.bat` can reuse it for rebuilds.
+
+CI lives in `.github/workflows/`:
+
+| Workflow | Purpose |
+|---|---|
+| `validate.yml` | Pins on every push: required files, 11-key + exact-count debloater pins, never-touch guards, `chrome++.ini` portability, workflow-file pins |
+| `build.yml` | check → build → release: resolves winget `PackageVersion`, publishes `yandex-portable_<ver>.zip` only when that tag has no release yet (hourly + manual) |
+| `smoke.yml` | Verdict job on `windows-latest`: layout asserts, 11/11 keys on `browser://policy`, EME probe (WARN on the known baseline), full `update.bat` e2e with protected-hash asserts → `Result: PASSED` |
+| `spike.yml` | One-off feasibility probe (kept for re-runs) — evidence in [`docs/spike-findings.md`](docs/spike-findings.md) |
+
+Local test suites: `pwsh -NoProfile -File tests/build-yandex.tests.ps1` (70 assertions)
+and `pwsh -NoProfile -File tests/update.tests.ps1` (83 assertions).
