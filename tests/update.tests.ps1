@@ -121,8 +121,10 @@ $batLines = @(Get-Content -LiteralPath $updateBat)
 Assert ($batLines.Count -gt 11) "T1 bat carries an embedded PS body (got $($batLines.Count) lines)"
 Assert ($batLines[8] -match 'Skip 11') 'T1 line 9 embeds the body with -Skip 11'
 Assert ($batLines[5] -match '%~dp0') 'T1 line 6 pins APP_DIR to the script dir (%~dp0, not CWD)'
+Assert ($batLines[6] -match 'APP_DIR:~0,-1') 'T1 line 7 strips the trailing separator from APP_DIR'
 Assert ($batLines[10] -match '^exit /b') 'T1 line 11 is exit /b (propagates the PS exit code)'
 Assert ($batLines[11] -match '^#') 'T1 PS body starts exactly at line 12 (skip count matches layout)'
+Assert ($batLines[8] -notmatch '\$env:APP_DIR') 'T1 line 9 never re-assigns APP_DIR (quote-break; the child process inherits lines 6-7)'
 
 Write-Host '== T2: extracted PS body parses cleanly =='
 $bodyLines = $batLines[11..($batLines.Count - 1)]
@@ -156,6 +158,8 @@ if ($definesFlow) {
     foreach ($fn in 'Invoke-UpdateFlow', 'Get-LatestPackageVersion', 'Save-LatestInstaller', 'Read-UpdatePrompt', 'Stop-AppBrowser', 'Copy-UpdatedFiles', 'Update-CdmLayout', 'Import-BloatPolicies', 'Resolve-InstallerUrl') {
         Assert ([bool](Get-Command $fn -ErrorAction SilentlyContinue)) "T4 function $fn exposed"
     }
+    # Real download function kept for T14 (the seam below replaces the name).
+    $script:realSaveInstaller = ${function:Save-LatestInstaller}
 
     # ---- seams: replace the two network functions and the prompt reader ----
     $script:promptLog   = @()
@@ -343,6 +347,58 @@ if ($definesFlow) {
     Assert ((Get-Trimmed (Join-Path $y13 'version.txt')) -eq '1.0.0.0') 'T13 version.txt not rewritten when builder fails'
     $tempAfter13 = Get-ChildDirCount 'yandex-update-*'
     Assert ($tempAfter13 -le $tempBefore13) "T13 temp workspace cleaned up after failure ($tempBefore13 -> $tempAfter13)"
+
+    # ---- T14: Save-LatestInstaller verifies the winget InstallerSha256 ----
+    # Fake hash seam (same style as New-FakeBuilder): the builder is real, but
+    # its URL helpers and Get-ManifestSha256 are overridden; Assert-InstallerSha256
+    # stays the REAL implementation and runs against the fake download.
+    Write-Host '== T14: download path verifies SHA256 (winget InstallerSha256) =='
+    $pkg14 = Join-Path $work 'pkg14'
+    New-Item -ItemType Directory -Path $pkg14 -Force | Out-Null
+    $builder14 = Join-Path $pkg14 'build-yandex.ps1'
+    $realBuilderPath = (Join-Path $repoRoot 'build-yandex.ps1') -replace "'", "''"
+    $fb = @'
+. '__REAL_BUILDER__'
+function Get-CdnCandidateUrl([string]$v) { "https://example.invalid/$v/Yandex.exe" }
+function Test-Url([string]$uri) { $true }
+function Resolve-ManifestUrl([string]$v) { 'https://example.invalid/x/Yandex.exe' }
+function Get-ManifestSha256([string]$v) { $script:shaQueried++; return $script:fakeSha }
+if ($MyInvocation.InvocationName -eq '.') { return }
+'@
+    Set-Content -Path $builder14 -Value ($fb.Replace('__REAL_BUILDER__', $realBuilderPath))
+
+    function Invoke-WebRequest {
+        [CmdletBinding()]
+        param([string]$Uri, [string]$OutFile, [int]$TimeoutSec, [switch]$UseBasicParsing, [string]$Method, [int]$MaximumRedirection)
+        if ($OutFile) {
+            $d = Split-Path -Parent $OutFile
+            if ($d -and -not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+            Set-Content -Path $OutFile -Value 'fake-installer-bytes' -NoNewline
+            return
+        }
+        return [pscustomobject]@{ StatusCode = 200; Content = 'fake' }
+    }
+    $refFile = Join-Path $work 'ref-installer.bin'
+    Set-Content -Path $refFile -Value 'fake-installer-bytes' -NoNewline
+    $script:fakeSha    = (Get-FileHash -LiteralPath $refFile -Algorithm SHA256).Hash
+    $script:shaQueried = 0
+
+    $dest14  = Join-Path (Join-Path $work 'dl14') 'Yandex.exe'
+    $got14   = $null
+    $err14   = $null
+    try { $got14 = & $script:realSaveInstaller -Latest '9.9.9.9' -BuilderScript $builder14 -DestFile $dest14 } catch { $err14 = $_.Exception.Message }
+    Assert ($null -eq $err14) "T14 download + verification completes for a matching hash (got: $err14)"
+    Assert ($got14 -eq $dest14) 'T14 Save-LatestInstaller returns the verified file'
+    Assert (Test-Path -LiteralPath $dest14) 'T14 installer written by the download'
+    Assert ($script:shaQueried -ge 1) "T14 winget InstallerSha256 consulted via Get-ManifestSha256 (queried $($script:shaQueried)x)"
+
+    $script:fakeSha = 'DEADBEEF' * 8   # well-formed but wrong 64-hex value
+    $dest14b = Join-Path (Join-Path $work 'dl14b') 'Yandex.exe'
+    $err14b = $null
+    try { $null = & $script:realSaveInstaller -Latest '9.9.9.9' -BuilderScript $builder14 -DestFile $dest14b } catch { $err14b = $_.Exception.Message }
+    Assert ($err14b -match 'SHA256 mismatch') "T14 hash mismatch hard-fails the update download (got: $err14b)"
+
+    Remove-Item -LiteralPath function:Invoke-WebRequest -ErrorAction SilentlyContinue
 }
 
 # ------------------------------------------------------------------ report --

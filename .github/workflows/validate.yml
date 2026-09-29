@@ -66,10 +66,14 @@ jobs:
             echo "  ERROR: forbidden security/DRM key present in debloater.reg"
             exit 1
           fi
-          if grep -q 'disable-component-update' chrome++.ini; then
-            echo "  ERROR: --disable-component-update must never ship (breaks Widevine/DRM)"
-            exit 1
-          fi
+          # Guard covers every shipping script that could embed the switch:
+          # the ini, the builder and update.bat (review fix: was ini-only).
+          for f in chrome++.ini build-yandex.ps1 update.bat; do
+            if grep -q 'disable-component-update' "$f"; then
+              echo "  ERROR: --disable-component-update must never ship in $f (breaks Widevine/DRM)"
+              exit 1
+            fi
+          done
           if grep -qF 'Policies\Chromium' debloater.reg; then
             echo "  ERROR: Yandex reads Policies\YandexBrowser, not Policies\Chromium"
             exit 1
@@ -118,3 +122,16 @@ jobs:
             exit 1
           fi
           echo "  OK: .github/workflows/smoke.yml"
+
+      # Both suites run hermetically on ubuntu (pwsh + p7zip preinstalled).
+      # tests/build-yandex.tests.ps1 T10 does a live winget-manifest fetch,
+      # so GITHUB_TOKEN rides along for API/CDN headroom on shared runners.
+      - name: Unit tests - build-yandex
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pwsh -NoProfile -File tests/build-yandex.tests.ps1
+
+      - name: Unit tests - update flow
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pwsh -NoProfile -File tests/update.tests.ps1

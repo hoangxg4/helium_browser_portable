@@ -37,19 +37,25 @@ agreement in your jurisdiction.
 
 ## Layout
 
+The release zip (`yandex-portable_<ver>.zip`) extracts to an outer
+`Yandex_Portable\` folder (verified against the shipped `26.8.4.893` zip listing):
+
 ```
-yandex-portable_<ver>/
-├── build-yandex.ps1        builder/extractor (also kept at package root)
-├── chrome++.ini            Chrome++ config: Data\ and Cache\ at package root
-├── debloater.reg           11 safe-first policies (HKLM\SOFTWARE\Policies\YandexBrowser)
-├── update.bat              updater (re-installs from GitHub Releases)
-├── version.txt             version = winget PackageVersion (sole source of truth)
-├── Yandex/                 browser tree
-│   ├── browser.exe         entry point (NOT chrome.exe)
-│   ├── version.dll         Chrome++ launcher (or launch.bat fallback — spike P2)
-│   └── WidevineCdm/        flat exe-dir CDM path, only if the CDM was shipped/registered
-├── Data/                   profile (created on first run)
-└── Cache/                  cache (created on first run)
+Yandex_Portable/
+├── build-yandex.ps1        builder/extractor at the package root
+│                           (update.bat calls $APP_DIR\..\build-yandex.ps1)
+├── layout-manifest.txt     builder-written layout listing
+├── preseed/                profile preseed sources (Local State / Preferences / First Run)
+├── Data/                   profile — seeded at build (Local State / Default\Preferences / First Run)
+├── Cache/                  cache (created on first run)
+└── Yandex/                 browser tree — also update.bat's own directory
+    ├── browser.exe         entry point (NOT chrome.exe)
+    ├── version.dll         Chrome++ launcher (or launch.bat fallback — spike P2)
+    ├── chrome++.ini        Chrome++ config: Data\ and Cache\ at package root
+    ├── debloater.reg       11 safe-first policies (HKLM\SOFTWARE\Policies\YandexBrowser)
+    ├── update.bat          updater (re-installs from GitHub Releases)
+    ├── version.txt         version = winget PackageVersion (sole source of truth)
+    └── WidevineCdm/        flat exe-dir CDM path, only if the CDM was shipped/registered
 ```
 
 ## Usage
@@ -62,11 +68,11 @@ yandex-portable_<ver>/
 
 ### Applying the debloat policies
 
-`debloater.reg` writes to `HKLM\SOFTWARE\Policies\YandexBrowser`, which is a
+`Yandex\debloater.reg` writes to `HKLM\SOFTWARE\Policies\YandexBrowser`, which is a
 machine-wide (HKLM) key:
 
-- **With admin rights** — double-click `debloater.reg` and confirm, or from an
-  elevated prompt run `reg import debloater.reg`. Verify afterwards on
+- **With admin rights** — double-click `Yandex\debloater.reg` and confirm, or from an
+  elevated prompt run `reg import Yandex\debloater.reg`. Verify afterwards on
   `chrome://policy`: each key shows `source = Platform`, `level = Mandatory`
   (proven in spike P3, headed run H5).
 - **Without admin rights** — the registry policies cannot be applied (HKLM write is
@@ -74,7 +80,7 @@ machine-wide (HKLM) key:
   from `Data\` (`Local State` / `Default\Preferences` + `First Run` sentinel), so the
   no-admin install is debloated too, just through prefs instead of policies.
 
-> Note: CI's smoke job runs `reg import debloater.reg` only to prove the file parses;
+> Note: CI's smoke job runs `reg import Yandex\debloater.reg` only to prove the file parses;
 > it **never applies policies to end users** — applying them is your explicit step.
 
 ### Debloat set (11 keys)
@@ -103,7 +109,7 @@ bad default).
 
 ## Update
 
-Run `update.bat` — it fetches the latest official release of this package, stops
+Run `Yandex\update.bat` — it fetches the latest official release of this package, stops
 `browser.exe`, copies over the protected files (`chrome++.ini`, `update.bat`,
 `debloater.reg`, `version.txt` — `Data\` and `Cache\` are never touched), migrates a
 versioned `WidevineCdm` folder to the flat exe-dir path, re-applies policies and

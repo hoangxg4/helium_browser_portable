@@ -6,7 +6,7 @@ echo.
 set "APP_DIR=%~dp0"
 set "APP_DIR=%APP_DIR:~0,-1%"
 set "PS1=%TEMP%\yandex_update.ps1"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:PSModulePath = $PSHOME + '\Modules;' + $env:PSModulePath; $env:APP_DIR='%APP_DIR%'; (Get-Content '%~f0' | Select-Object -Skip 11) | Out-File -Encoding utf8 '%PS1%'; & '%PS1%'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:PSModulePath = $PSHOME + '\Modules;' + $env:PSModulePath; (Get-Content '%~f0' | Select-Object -Skip 11) | Out-File -Encoding utf8 '%PS1%'; & '%PS1%'"
 set "RC=%ERRORLEVEL%" & del "%PS1%" 2>nul
 exit /b %RC%
 # ---------------------------------------------------------------------------
@@ -75,10 +75,15 @@ function Resolve-InstallerUrl([string]$Latest, [string]$BuilderScript) {
 }
 
 function Save-LatestInstaller([string]$Latest, [string]$BuilderScript, [string]$DestFile) {
+    . $BuilderScript
     $url = Resolve-InstallerUrl -Latest $Latest -BuilderScript $BuilderScript
     Write-Host "  downloading $url"
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Invoke-WebRequest -Uri $url -OutFile $DestFile -TimeoutSec 900 -UseBasicParsing
+    # Integrity (builder helper): hard fail on a tampered/corrupted payload.
+    $expected = Get-ManifestSha256 $Latest
+    $null = Assert-InstallerSha256 -Path $DestFile -ExpectedSha256 $expected
+    Write-Host "  SHA256 verified against winget manifest ($expected)"
     return $DestFile
 }
 

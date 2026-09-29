@@ -17,7 +17,9 @@ param(
                            version.txt; a version read back from the binary is a
                            log-only cross-check. -Download builds the CDN candidate
                            URL from -Version (digits joined by _), HEAD-verifies it
-                           and falls back to the winget manifest InstallerUrl.
+                           and falls back to the winget manifest InstallerUrl. Every
+                           download is SHA256-verified against the manifest's
+                           InstallerSha256 before extraction (hard fail on mismatch).
       2. Extract         - spike P1 branch A (outer exe resource archive: 7z payload
                            of Yandex.exe -> nested browser.7z/BROWSER.PACKED.7Z) and
                            branch B (post-silent-install tree with
@@ -68,10 +70,46 @@ function Test-Url([string]$uri) {
     }
 }
 
+function Get-WingetManifestUrl([string]$version) {
+    return "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/y/Yandex/Browser/$version/Yandex.Browser.installer.yaml"
+}
+
+function Read-InstallerSha256([string]$manifestContent) {
+    # Pure parser (test seam): winget's InstallerSha256 is the integrity anchor
+    # for every download; a manifest without it cannot be trusted.
+    if ($manifestContent -notmatch '(?m)^\s*InstallerSha256:\s*([0-9A-Fa-f]{64})\s*$') {
+        throw "winget manifest has no InstallerSha256 (64-hex) - cannot verify the Yandex.exe download"
+    }
+    return $Matches[1].ToUpperInvariant()
+}
+
+function Get-ManifestSha256([string]$version) {
+    # winget manifest is authoritative for the payload hash (same source as
+    # InstallerUrl) - fetched after every download (review fix: SHA256 integrity).
+    $manifestUrl = Get-WingetManifestUrl $version
+    $manifest = Invoke-WebRequest -Uri $manifestUrl -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+    try {
+        return Read-InstallerSha256 $manifest.Content
+    }
+    catch {
+        throw "winget manifest for $version could not provide InstallerSha256 (checked $manifestUrl): $($_.Exception.Message)"
+    }
+}
+
+function Assert-InstallerSha256([string]$Path, [string]$ExpectedSha256) {
+    # Hard fail on mismatch: a tampered or corrupted payload never reaches layout.
+    $expected = $ExpectedSha256.Trim().ToUpperInvariant()
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+    if ($actual -ne $expected) {
+        throw "SHA256 mismatch for ${Path}: expected $expected, got $actual (winget manifest InstallerSha256) - refusing to use a tampered or corrupted Yandex.exe download"
+    }
+    return $actual
+}
+
 function Resolve-ManifestUrl([string]$version) {
     # winget manifest is authoritative for the exact InstallerUrl (it carries the
     # CDN _build suffix the bare pattern cannot guess).
-    $manifestUrl = "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/y/Yandex/Browser/$version/Yandex.Browser.installer.yaml"
+    $manifestUrl = Get-WingetManifestUrl $version
     $manifest = Invoke-WebRequest -Uri $manifestUrl -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
     if ($manifest.Content -notmatch '(?m)^\s*InstallerUrl:\s*(\S+)\s*$') {
         throw "winget manifest for $version has no InstallerUrl (checked $manifestUrl)"
@@ -179,6 +217,17 @@ if ($Download) {
         Write-Error "stage 1: download failed: $($_.Exception.Message)"
         exit 1
     }
+    # Integrity: every download is verified against the winget manifest's
+    # InstallerSha256 (review fix) - mismatch aborts the build.
+    try {
+        $expectedSha = Get-ManifestSha256 $Version
+        $null = Assert-InstallerSha256 -Path $downloaded -ExpectedSha256 $expectedSha
+    }
+    catch {
+        Write-Error "stage 1: SHA256 verification failed: $($_.Exception.Message)"
+        exit 1
+    }
+    Write-Host "stage 1: SHA256 verified against winget manifest InstallerSha256 ($expectedSha)"
     $Installer = $downloaded
 }
 else {

@@ -129,6 +129,22 @@ present pre- and post-update**, EME reported WARN per the spike-P4 rule, exit co
 4. **EULA takedown exposure** — accepted (see above); mitigation is that a takedown
    removes releases only, and `build-yandex.ps1` can rebuild locally from the official
    payload.
+5. **DRM/Widevine never proven.** Spike P4 baseline was `CDM_FAIL`
+   (`NotSupportedError: Unsupported keySystem` in headless CI), and the smoke EME rule
+   deliberately degrades to **WARN** — so CI stays green even if Widevine never works.
+   Users who need Netflix/DRM should verify Widevine on first run
+   (`chrome://components` → *Widevine Content Decryption Module* → up to date, then a
+   DRM test stream) before relying on this package for streaming.
+6. **The package-root builder never refreshes.** `update.bat`'s copy-over scope is
+   `Yandex\` only, so fixes to the package-root `build-yandex.ps1` never reach existing
+   installs — an old install keeps rebuilding with its shipped (old) builder
+   (chicken-and-egg; by design, since `update.bat` calls `$APP_DIR\..\build-yandex.ps1`
+   from the package root). Re-extracting a fresh release picks up builder fixes.
+7. **End-user update path calls the GitHub API unauthenticated.**
+   `Get-LatestPackageVersion` hits `api.github.com` without a token unless one is set,
+   which is limited to **60 requests/hour per IP** — users behind a shared/corporate NAT
+   may see update failures from rate limiting. Mitigation: set a `GITHUB_TOKEN`
+   environment variable before running `Yandex\update.bat` (the updater honors it).
 
 ## Links
 

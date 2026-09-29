@@ -1,9 +1,9 @@
 # tests/build-yandex.tests.ps1 — behavior tests for build-yandex.ps1 (Tasks 03-04)
 #
 # Run:  pwsh -NoProfile -File tests/build-yandex.tests.ps1
-# Needs: pwsh 7+, 7z (p7zip) in PATH. No network required (Chrome++ stage is
-# fed local fixture archives, and the -Download path is only tested for its
-# missing-Version guard).
+# Needs: pwsh 7+, 7z (p7zip) in PATH. Network needed only for T10's live
+# winget-manifest resolve (GITHUB_TOKEN gives CI runners rate-limit headroom);
+# everything else is hermetic (local fixture archives).
 
 $ErrorActionPreference = 'Stop'
 
@@ -321,6 +321,44 @@ if (Test-Path $frOut) {
 Assert (Test-Path (Join-Path $out13 'preseed/Local State')) 'T14 preseed\ shipped at package root (self-contained rebuild)'
 Assert ($r13.Output -match 'preseed') 'T14 preseed stage logged'
 Assert ((Select-String -Path $builder -Pattern 'preseed' -Quiet) -eq $true) 'T14 build-yandex.ps1 references preseed (plan Verify grep)'
+
+Write-Host '== T15: SHA256 verification of the Yandex.exe download =='
+$shaSeam = Select-String -Path $builder -Pattern 'function\s+Get-ManifestSha256' -Quiet
+Assert ($shaSeam -eq $true) 'T15 build-yandex.ps1 exposes Get-ManifestSha256 (dot-source seam)'
+$assertSeam = Select-String -Path $builder -Pattern 'function\s+Assert-InstallerSha256' -Quiet
+Assert ($assertSeam -eq $true) 'T15 build-yandex.ps1 exposes Assert-InstallerSha256 (dot-source seam)'
+if ($shaSeam -and $assertSeam) {
+    # T10 dot-sources the builder into this scope; re-load if a prior run skipped it.
+    if (-not (Get-Command Read-InstallerSha256 -ErrorAction SilentlyContinue)) { . $builder }
+    $goodSha = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+    $fakeManifest = @"
+PackageVersion: 9.9.9.9
+Installers:
+  - InstallerUrl: https://download.cdn.yandex.net/browser/int/9_9_9_9/en/Yandex.exe
+    InstallerSha256: $goodSha
+"@
+    $parsed    = $null
+    $parseErr  = $null
+    try { $parsed = Read-InstallerSha256 $fakeManifest } catch { $parseErr = $_.Exception.Message }
+    Assert ($null -eq $parseErr) "T15 Read-InstallerSha256 parses a winget manifest (got: $parseErr)"
+    Assert ($parsed -eq $goodSha.ToUpperInvariant()) 'T15 parsed InstallerSha256 matches the manifest value (uppercased)'
+    $noShaErr = $null
+    try { $null = Read-InstallerSha256 "PackageVersion: 9.9.9.9`nInstallers: []" } catch { $noShaErr = $_.Exception.Message }
+    Assert ($noShaErr -match 'InstallerSha256') "T15 missing InstallerSha256 hard-fails with a clear message (got: $noShaErr)"
+
+    $shaFile = Join-Path $work 'sha-fixture.bin'
+    Set-Content -Path $shaFile -Value 'payload-bytes' -NoNewline
+    $realSha = (Get-FileHash -LiteralPath $shaFile -Algorithm SHA256).Hash
+    $okErr = $null
+    try { $null = Assert-InstallerSha256 -Path $shaFile -ExpectedSha256 $realSha } catch { $okErr = $_.Exception.Message }
+    Assert ($null -eq $okErr) "T15 Assert-InstallerSha256 accepts the matching winget hash (got: $okErr)"
+    $badErr = $null
+    try { $null = Assert-InstallerSha256 -Path $shaFile -ExpectedSha256 $goodSha } catch { $badErr = $_.Exception.Message }
+    Assert ($badErr -match 'SHA256 mismatch') "T15 mismatch hard-fails with a clear SHA256 mismatch message (got: $badErr)"
+
+    $srcSha = Get-Content $builder -Raw
+    Assert ($srcSha -match 'Assert-InstallerSha256') 'T15 -Download path calls Assert-InstallerSha256 after the download'
+}
 
 # ------------------------------------------------------------------ report --
 

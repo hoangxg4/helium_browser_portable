@@ -853,9 +853,12 @@ jobs:
           "Running update.bat (piped 'y')..." | Add-Content "$env:SMOKE/summary.md"
           Push-Location $app
           try {
-            $p = Start-Process -FilePath "$env:ComSpec" -ArgumentList '/c','echo y| update.bat' -WorkingDirectory $app -Wait -PassThru -NoNewWindow
+            # stdout/stderr captured: Phase C asserts update.bat's OWN printed
+            # "policies : applied" line from this file (no self-heal re-import).
+            $p = Start-Process -FilePath "$env:ComSpec" -ArgumentList '/c','echo y| update.bat' -WorkingDirectory $app -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$env:SMOKE/update-out.txt" -RedirectStandardError "$env:SMOKE/update-err.txt"
             "update.bat exit code: $($p.ExitCode)" | Add-Content "$env:SMOKE/summary.md"
           } finally { Pop-Location }
+          if (Test-Path "$env:SMOKE/update-out.txt") { Get-Content "$env:SMOKE/update-out.txt" | Write-Host }
           Assert ($p.ExitCode -eq 0) "update: exit code 0 (got $($p.ExitCode))"
 
           $newV = ''
@@ -884,23 +887,25 @@ jobs:
           }
           Assert $dataOk "update: Data\ intact (Local State / Default Preferences / First Run byte-identical)"
 
-          # 11 policy keys still applied after the update (update.bat re-imports
-          # debloater.reg itself; re-import once more if anything went missing).
+          # 11 policy keys still present after the update. Phase B already
+          # imported them, so presence alone cannot prove update.bat's own
+          # Import-BloatPolicies succeeded - and the old self-heal re-import
+          # here MASKED that failure. No re-import: verdict evidence is
+          # update.bat's own printed "policies : applied" line (asserted below).
           $missing2 = @()
           foreach ($k in $keys) {
             & reg.exe query 'HKLM\SOFTWARE\Policies\YandexBrowser' /v $k | Out-Null
             if ($LASTEXITCODE -ne 0) { $missing2 += $k }
           }
-          if ($missing2.Count -gt 0) {
-            "update: $($missing2.Count) policy key(s) missing after update - re-importing debloater.reg" | Add-Content "$env:SMOKE/summary.md"
-            & reg.exe import "$app\debloater.reg" | Out-Null
-            $missing2 = @()
-            foreach ($k in $keys) {
-              & reg.exe query 'HKLM\SOFTWARE\Policies\YandexBrowser' /v $k | Out-Null
-              if ($LASTEXITCODE -ne 0) { $missing2 += $k }
-            }
-          }
           Assert ($missing2.Count -eq 0) "update: all 11 policy keys present under HKLM\SOFTWARE\Policies\YandexBrowser (missing: $($missing2 -join ', '))"
+
+          # update.bat's own Import-BloatPolicies verdict, from its captured
+          # stdout: "  policies     : applied | missing | failed-*".
+          $updOut = ''
+          if (Test-Path "$env:SMOKE/update-out.txt") { $updOut = Get-Content "$env:SMOKE/update-out.txt" -Raw }
+          $polLine = (($updOut -split "`r?`n") | Where-Object { $_ -match 'policies\s*:' } | Select-Object -First 1)
+          if ($polLine) { "update: $($polLine.Trim())" | Add-Content "$env:SMOKE/summary.md" }
+          Assert ($updOut -match 'policies\s*:\s*applied') "update: update.bat printed 'policies : applied' (its own reg import, no self-heal re-import)"
 
           # EME re-probe: the update re-copies version.dll from the staged
           # tree, so move it aside again before probing (Helium lesson).
