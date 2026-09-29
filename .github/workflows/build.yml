@@ -35,7 +35,9 @@ jobs:
           # Latest winget PackageVersion - sole source of truth for tag, zip
           # name and version.txt (same source update.bat and the builder use).
           LIST_URL="https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/y/Yandex/Browser"
-          VER=$(curl -sSL -H "User-Agent: yandex-browser-portable-ci" "$LIST_URL" \
+          # Authenticated: shared runner IPs exhaust the anonymous API limit.
+          VER=$(curl -sSL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                  -H "User-Agent: yandex-browser-portable-ci" "$LIST_URL" \
                   | jq -r '.[] | select(.type == "dir") | .name' \
                   | grep -E '^[0-9]+(\.[0-9]+)+$' \
                   | sort -V | tail -1 || true)

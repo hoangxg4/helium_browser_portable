@@ -6,7 +6,7 @@ echo.
 set "APP_DIR=%~dp0"
 set "APP_DIR=%APP_DIR:~0,-1%"
 set "PS1=%TEMP%\yandex_update.ps1"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:APP_DIR='%APP_DIR%'; (Get-Content '%~f0' | Select-Object -Skip 11) | Out-File -Encoding utf8 '%PS1%'; & '%PS1%'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:PSModulePath = $PSHOME + '\Modules;' + $env:PSModulePath; $env:APP_DIR='%APP_DIR%'; (Get-Content '%~f0' | Select-Object -Skip 11) | Out-File -Encoding utf8 '%PS1%'; & '%PS1%'"
 set "RC=%ERRORLEVEL%" & del "%PS1%" 2>nul
 exit /b %RC%
 # ---------------------------------------------------------------------------
@@ -19,6 +19,28 @@ exit /b %RC%
 # version.txt is rewritten by this flow itself after a successful update.
 $protectedPaths = @('chrome++.ini', 'update.bat', 'debloater.reg', 'version.txt')
 
+# When update.bat is spawned from pwsh (smoke CI), powershell.exe 5.1 inherits
+# pwsh's PSModulePath (Core paths first) and cannot auto-load Utility commands
+# such as Get-FileHash (PowerShell issue #8635). The batch header prepends
+# $PSHOME\Modules, and this .NET fallback keeps hashing working regardless.
+if (-not (Get-Command Get-FileHash -ErrorAction SilentlyContinue)) {
+    function Get-FileHash {
+        param(
+            [Parameter(Mandatory = $true)][string]$LiteralPath,
+            [string]$Algorithm = 'SHA256'
+        )
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $fs = [IO.File]::OpenRead($LiteralPath)
+        try {
+            [pscustomobject]@{ Hash = [BitConverter]::ToString($sha.ComputeHash($fs)).Replace('-', '') }
+        }
+        finally {
+            $fs.Dispose()
+            $sha.Dispose()
+        }
+    }
+}
+
 function Read-UpdatePrompt([string]$Message) {
     # Single Read-Host wrapper: CI pipes `echo y| update.bat` (Helium pattern).
     Read-Host $Message
@@ -28,7 +50,9 @@ function Get-LatestPackageVersion {
     # winget-pkgs PackageVersion dirs are the same source of truth
     # build-yandex.ps1 trusts for tag/zip/version.txt (design section 3).
     $listUrl = 'https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/y/Yandex/Browser'
-    $entries = Invoke-RestMethod -Uri $listUrl -Headers @{ 'User-Agent' = 'yandex-browser-portable-updater' }
+    $hdrs = @{ 'User-Agent' = 'yandex-browser-portable-updater' }
+    if ($env:GITHUB_TOKEN) { $hdrs['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
+    $entries = Invoke-RestMethod -Uri $listUrl -Headers $hdrs
     $versions = @($entries | Where-Object { $_.type -eq 'dir' } | ForEach-Object {
         $v = $null
         if ([version]::TryParse($_.name, [ref]$v)) { [pscustomobject]@{ Name = $_.name; Version = $v } }
@@ -264,6 +288,7 @@ try {
 }
 catch {
     Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "  PSModulePath: $env:PSModulePath" -ForegroundColor Red
     $rc = 1
 }
 if ($outcome -ne 'Declined') {

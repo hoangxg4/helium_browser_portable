@@ -838,7 +838,7 @@ jobs:
 
           # Upstream latest for post-update expectations: the winget
           # PackageVersion (the same source update.bat and the builder trust).
-          $entries = Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/y/Yandex/Browser' -Headers @{ 'User-Agent' = 'yandex-browser-portable-smoke' }
+          $entries = Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/y/Yandex/Browser' -Headers @{ 'User-Agent' = 'yandex-browser-portable-smoke'; Authorization = "Bearer $env:GITHUB_TOKEN" }
           $latest = ($entries | Where-Object { $_.type -eq 'dir' -and $_.name -match '^\d+(\.\d+)+$' } |
                      ForEach-Object { [version]$_.name } | Sort-Object -Descending | Select-Object -First 1).ToString()
           "update flow: winget PackageVersion=$latest (released tag=$ver)" | Add-Content "$env:SMOKE/summary.md"

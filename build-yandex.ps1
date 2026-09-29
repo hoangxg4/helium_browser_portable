@@ -7,40 +7,40 @@ param(
 )
 
 <#
-    build-yandex.ps1 — Yandex Browser Portable builder (Task 3: extract, layout,
+    build-yandex.ps1 - Yandex Browser Portable builder (Task 3: extract, layout,
     version.txt, strip updater, spike reconciliation).
 
-    Stages (design §3, idempotent):
-      1. Resolve source  — -Installer <path> (user-supplied) or -Download (CI, public
+    Stages (design section 3, idempotent):
+      1. Resolve source  - -Installer <path> (user-supplied) or -Download (CI, public
                            CDN). The winget PackageVersion passed via -Version is the
                            SOLE source of truth for the release tag, zip name and
                            version.txt; a version read back from the binary is a
                            log-only cross-check. -Download builds the CDN candidate
                            URL from -Version (digits joined by _), HEAD-verifies it
                            and falls back to the winget manifest InstallerUrl.
-      2. Extract         — spike P1 branch A (outer exe resource archive: 7z payload
+      2. Extract         - spike P1 branch A (outer exe resource archive: 7z payload
                            of Yandex.exe -> nested browser.7z/BROWSER.PACKED.7Z) and
                            branch B (post-silent-install tree with
                            Installer\browser.7z). Hard-fails naming BOTH branches
                            when neither yields browser.exe.
-      3. Layout          — Yandex_Portable\{Yandex\..., Data\, Cache\}; copy
+      3. Layout          - Yandex_Portable\{Yandex\..., Data\, Cache\}; copy
                            chrome++.ini/debloater.reg/update.bat into Yandex\, this
                            script to the package root (update.bat calls
                            $APP_DIR\..\build-yandex.ps1), write version.txt, apply
                            the flat CDM rule (Yandex\WidevineCdm next to
-                           browser.exe — Chrome registers the preinstalled CDM only
+                           browser.exe - Chrome registers the preinstalled CDM only
                            from the exe-dir flat path), place Chrome++ version.dll
                            next to browser.exe with a launch.bat --user-data-dir
                            fallback (spike P2/P2b), then write layout-manifest.txt.
-      4. Debloat         — profile preseed: copy preseed/Local State ->
+      4. Debloat         - profile preseed: copy preseed/Local State ->
                            Data\Local State, preseed/Preferences ->
                            Data\Default\Preferences, empty "First Run" sentinel
-                           -> Data\ (prefs-only path, works without admin —
+                           -> Data\ (prefs-only path, works without admin -
                            review fix #10; without the sentinel Yandex discards
                            hand-made profile files). debloater.reg itself is
                            applied outside this builder (admin import / CI
                            smoke validation).
-      5. Strip updater   — remove service_update.exe / yupdate-exec.exe;
+      5. Strip updater   - remove service_update.exe / yupdate-exec.exe;
                            UpdateAllowed=0 and BackgroundUpdateAllowed=0 are already
                            carried by debloater.reg.
 
@@ -78,7 +78,7 @@ function Resolve-ManifestUrl([string]$version) {
     }
     $url = $Matches[1]
     if (-not (Test-Url $url)) {
-        Write-Host "note: HEAD did not confirm $url (CDN may reject HEAD) — download will verify it"
+        Write-Host "note: HEAD did not confirm $url (CDN may reject HEAD) - download will verify it"
     }
     return $url
 }
@@ -160,12 +160,12 @@ if ($Download) {
         Write-Host "stage 1: InstallerUrl from CDN pattern: $installerUrl"
     }
     else {
-        Write-Host "stage 1: CDN candidate not live (HEAD failed): $candidate — falling back to winget manifest"
+        Write-Host "stage 1: CDN candidate not live (HEAD failed): $candidate - falling back to winget manifest"
         try {
             $installerUrl = Resolve-ManifestUrl $Version
         }
         catch {
-            Write-Error "stage 1: cannot resolve InstallerUrl for version $Version — $($_.Exception.Message)"
+            Write-Error "stage 1: cannot resolve InstallerUrl for version $Version - $($_.Exception.Message)"
             exit 1
         }
         Write-Host "stage 1: InstallerUrl from winget manifest: $installerUrl"
@@ -203,7 +203,7 @@ $OutDir = [IO.Path]::GetFullPath($OutDir)
 Write-Host "stage 1: version=$Version OutDir=$OutDir"
 
 if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) {
-    Write-Error 'stage 2: 7z not found in PATH — install p7zip/7-Zip first'
+    Write-Error 'stage 2: 7z not found in PATH - install p7zip/7-Zip first'
     exit 1
 }
 
@@ -215,8 +215,8 @@ try {
     $appRoot = $null
 
     if (Test-Path -LiteralPath $Installer -PathType Container) {
-        # Branch B — post-silent-install tree: Installer\browser.7z
-        Write-Host "stage 2: branch B (post-silent-install) — scanning $Installer for Installer\browser.7z"
+        # Branch B - post-silent-install tree: Installer\browser.7z
+        Write-Host "stage 2: branch B (post-silent-install) - scanning $Installer for Installer\browser.7z"
         $nested = Find-NestedBrowserArchive $Installer
         if ($nested -and (Invoke-SevenZipExtract $nested (Join-Path $work 'app'))) {
             $appRoot = Find-BrowserRoot (Join-Path $work 'app')
@@ -226,8 +226,8 @@ try {
         }
     }
     else {
-        # Branch A — outer exe resource archive (spike P1 verdict: PASS, branch A)
-        Write-Host "stage 2: branch A (outer exe resource archive) — opening payload of $Installer"
+        # Branch A - outer exe resource archive (spike P1 verdict: PASS, branch A)
+        Write-Host "stage 2: branch A (outer exe resource archive) - opening payload of $Installer"
         $outer = Join-Path $work 'outer'
         if (Invoke-SevenZipExtract $Installer $outer) {
             $appRoot = Find-BrowserRoot $outer
@@ -239,12 +239,12 @@ try {
             }
         }
         else {
-            Write-Host "stage 2: branch A could not open the archive — will report both branches if nothing matches"
+            Write-Host "stage 2: branch A could not open the archive - will report both branches if nothing matches"
         }
     }
 
     if (-not $appRoot) {
-        Write-Error ("build-yandex.ps1: no browser.exe found — neither extraction branch matched. " +
+        Write-Error ("build-yandex.ps1: no browser.exe found - neither extraction branch matched. " +
             "Branch A (outer exe resource archive): the Yandex.exe payload is a 7z archive containing a nested browser.7z/BROWSER.PACKED.7Z. " +
             "Branch B (post-silent-install): a silent-install tree containing Installer\browser.7z. " +
             "Pass -Installer <Yandex.exe | install dir> that contains one of them.")
@@ -265,7 +265,7 @@ try {
     Get-ChildItem -LiteralPath $appRoot -Force | Copy-Item -Destination $yandexDir -Recurse -Force
 
     # Flat CDM rule: Chrome registers the preinstalled WidevineCdm only from the
-    # exe-dir flat path — any versioned Yandex\<ver>\WidevineCdm nesting is dead.
+    # exe-dir flat path - any versioned Yandex\<ver>\WidevineCdm nesting is dead.
     $flatCdm = Join-Path $yandexDir 'WidevineCdm'
     $nestedCdm = @(Get-ChildItem -LiteralPath $yandexDir -Recurse -Directory -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -eq 'WidevineCdm' -and $_.FullName -ne $flatCdm })
@@ -282,27 +282,33 @@ try {
     $badCdm = @(Get-ChildItem -LiteralPath $yandexDir -Recurse -Directory -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -eq 'WidevineCdm' -and $_.FullName -ne $flatCdm })
     if ($badCdm.Count -gt 0) {
-        Write-Error "stage 3: versioned WidevineCdm nesting still present after layout ($($badCdm[0].FullName)) — aborting"
+        Write-Error "stage 3: versioned WidevineCdm nesting still present after layout ($($badCdm[0].FullName)) - aborting"
         exit 1
     }
 
     foreach ($f in 'chrome++.ini', 'debloater.reg', 'update.bat') {
-        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $f) -Destination $yandexDir -Force
+        # Shipped packages carry these inside Yandex\ already (and the update
+        # flow treats them as protected), so a missing source here is expected
+        # when rebuilding from an extracted package - not an error.
+        $src = Join-Path $PSScriptRoot $f
+        if (Test-Path -LiteralPath $src) {
+            Copy-Item -LiteralPath $src -Destination $yandexDir -Force
+        }
     }
 
-    # update.bat invokes $APP_DIR\..\build-yandex.ps1 — ship this script at the
+    # update.bat invokes $APP_DIR\..\build-yandex.ps1 - ship this script at the
     # package root, as a sibling of Yandex\.
     $selfDest = Join-Path $OutDir 'build-yandex.ps1'
     if ($selfDest -ne $PSCommandPath) {
         Copy-Item -LiteralPath $PSCommandPath -Destination $selfDest -Force
     }
 
-    # version.txt — winget PackageVersion from the caller, never binary-parsed.
+    # version.txt - winget PackageVersion from the caller, never binary-parsed.
     Set-Content -Path (Join-Path $yandexDir 'version.txt') -Value $Version
 
     $browserExe = Join-Path $yandexDir 'browser.exe'
     if (-not (Test-Path -LiteralPath $browserExe)) {
-        Write-Error "stage 3: browser.exe missing in $yandexDir — aborting"
+        Write-Error "stage 3: browser.exe missing in $yandexDir - aborting"
         exit 1
     }
     try {
@@ -332,11 +338,11 @@ try {
         $launchBody = '@echo off' + "`r`n" +
             'start "" "%~dp0Yandex\browser.exe" --user-data-dir="%~dp0Data" %*' + "`r`n"
         [IO.File]::WriteAllText((Join-Path $OutDir 'launch.bat'), $launchBody)
-        Write-Host 'stage 3: version.dll unavailable — wrote launch.bat fallback (--user-data-dir launcher)'
+        Write-Host 'stage 3: version.dll unavailable - wrote launch.bat fallback (--user-data-dir launcher)'
     }
 
     # ------------------------------------------------ stage 4: profile preseed
-    # Prefs-only debloat path (review fix #10) — no admin rights needed. The
+    # Prefs-only debloat path (review fix #10) - no admin rights needed. The
     # empty "First Run" sentinel must ship with the JSON, otherwise Yandex
     # treats hand-made profile files as corrupted and regenerates defaults.
     $preseedSrc   = Join-Path $PSScriptRoot 'preseed'
@@ -409,5 +415,5 @@ finally {
 }
 
 if ($exitCode -ne 0) { exit $exitCode }
-Write-Host "build-yandex.ps1: done — package at $OutDir"
+Write-Host "build-yandex.ps1: done - package at $OutDir"
 exit 0
