@@ -1,0 +1,205 @@
+name: Build Yandex Portable
+
+# Single publish point for releases (Design section 2): check -> build -> release.
+# The `exists` gate never republishes over an existing yandex-portable_*.zip.
+# Force-rebuild of the same version (Helium lesson): delete the release ASSET
+# first, never the tag, then dispatch:
+#   gh release delete-asset yandex-portable_<ver> yandex-portable_<ver>.zip --repo hcdbp24c3/yandex-browser-portable
+#   gh workflow run build.yml
+# If the release step fails on a pre-existing asset, delete the asset (NOT the
+# tag) with `gh release delete-asset` and re-dispatch.
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+# Serialize cron vs manual dispatch (Helium: overwrite race lesson).
+concurrency:
+  group: yandex-portable-release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      yandex_ver: ${{ steps.check.outputs.yandex_ver }}
+      tag: ${{ steps.check.outputs.tag }}
+      exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - name: Resolve winget PackageVersion and release existence
+        id: check
+        run: |
+          set -e
+
+          # Latest winget PackageVersion - sole source of truth for tag, zip
+          # name and version.txt (same source update.bat and the builder use).
+          LIST_URL="https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/y/Yandex/Browser"
+          VER=$(curl -sSL -H "User-Agent: yandex-browser-portable-ci" "$LIST_URL" \
+                  | jq -r '.[] | select(.type == "dir") | .name' \
+                  | grep -E '^[0-9]+(\.[0-9]+)+$' \
+                  | sort -V | tail -1 || true)
+          if [ -z "$VER" ]; then
+            echo "ERROR: no winget PackageVersion directory under $LIST_URL"
+            exit 1
+          fi
+
+          TAG="yandex-portable_${VER}"
+          echo "winget PackageVersion: $VER"
+          echo "tag: $TAG"
+
+          # exists = release tag AND its yandex-portable_*.zip asset present.
+          # A tag without the zip counts as NOT released (self-repair: rebuild
+          # adds the missing zip to the same tag via overwrite_files).
+          # No dispatch override: exists is always the real state; force
+          # rebuild = delete the asset first (see header).
+          # Fail-closed: any API answer other than 200/404 aborts instead of
+          # guessing - a rate-limited check must never republish over a zip.
+          REL_BODY=$(mktemp)
+          HTTP_CODE=$(curl -sS -o "$REL_BODY" -w '%{http_code}' \
+                  -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                  -H "Accept: application/vnd.github+json" \
+                  -H "User-Agent: yandex-browser-portable-ci" \
+                  "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" || echo "000")
+          ASSET_COUNT=0
+          case "$HTTP_CODE" in
+            200)
+              ASSET_COUNT=$(jq '[.assets[]? | select(.name | test("^yandex-portable_.*\\.zip$"))] | length' "$REL_BODY")
+              ;;
+            404)
+              # tag does not exist yet - never released
+              ;;
+            *)
+              echo "ERROR: releases API for $TAG returned HTTP $HTTP_CODE - refusing to decide exists (fail-closed)"
+              cat "$REL_BODY"
+              exit 1
+              ;;
+          esac
+          EXISTS="false"
+          if [ "$ASSET_COUNT" -ge 1 ]; then
+            EXISTS="true"
+          fi
+          echo "exists: $EXISTS (zip assets: $ASSET_COUNT, http $HTTP_CODE)"
+
+          {
+            echo "yandex_ver=$VER"
+            echo "tag=$TAG"
+            echo "exists=$EXISTS"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    if: needs.check.outputs.exists == 'false'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build package
+        run: |
+          $ver = "${{ needs.check.outputs.yandex_ver }}"
+          Write-Host "winget PackageVersion: $ver"
+          ./build-yandex.ps1 -Download -Version $ver
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "build-yandex.ps1 failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+
+      - name: Layout asserts
+        run: |
+          $ver = "${{ needs.check.outputs.yandex_ver }}"
+          $pkg = "Yandex_Portable"
+
+          $required = @(
+            "Yandex\browser.exe",
+            "Yandex\chrome++.ini",
+            "Yandex\debloater.reg",
+            "Yandex\version.txt",
+            "build-yandex.ps1",
+            "preseed\Local State",
+            "preseed\Preferences",
+            "preseed\First Run"
+          )
+          $missing = @()
+          foreach ($rel in $required) {
+            if (-not (Test-Path -LiteralPath (Join-Path $pkg $rel))) { $missing += $rel }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Error "package layout assert failed - missing: $($missing -join ', ')"
+            exit 1
+          }
+
+          $vt = (Get-Content -LiteralPath (Join-Path $pkg "Yandex\version.txt") -Raw).Trim()
+          if ($vt -ne $ver) {
+            Write-Error "Yandex\version.txt holds '$vt' but winget PackageVersion is '$ver'"
+            exit 1
+          }
+
+          foreach ($updater in "service_update.exe", "yupdate-exec.exe") {
+            $hit = @(Get-ChildItem -LiteralPath $pkg -Recurse -File -Filter $updater -ErrorAction SilentlyContinue)
+            if ($hit.Count -gt 0) {
+              Write-Error "updater not stripped: $($hit[0].FullName)"
+              exit 1
+            }
+          }
+
+          # Flat CDM rule: any WidevineCdm must sit directly under Yandex\
+          # (exe-dir rule); versioned Yandex\<ver>\WidevineCdm is dead weight.
+          # GetFullPath: compare absolute paths (Get-ChildItem reports absolute
+          # FullName; a relative Join-Path would never equal it).
+          $cdmRoot = Join-Path $pkg "Yandex"
+          $flat = [IO.Path]::GetFullPath((Join-Path $cdmRoot "WidevineCdm"))
+          $bad = @(Get-ChildItem -LiteralPath $cdmRoot -Recurse -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq "WidevineCdm" -and $_.FullName -ne $flat })
+          if ($bad.Count -gt 0) {
+            Write-Error "versioned WidevineCdm nesting in package: $($bad[0].FullName)"
+            exit 1
+          }
+          if (Test-Path -LiteralPath $flat) {
+            Write-Host "layout: WidevineCdm present at flat Yandex\WidevineCdm"
+          } else {
+            Write-Host "layout: WidevineCdm absent (runtime component registration only)"
+          }
+
+          Write-Host "layout asserts OK for $pkg (version $ver)"
+
+      - name: Package zip
+        run: |
+          $ver = "${{ needs.check.outputs.yandex_ver }}"
+          $zip = "yandex-portable_$ver.zip"
+          Compress-Archive -Path Yandex_Portable -DestinationPath $zip -Force
+          if (-not (Test-Path -LiteralPath $zip)) {
+            Write-Error "zip not produced: $zip"
+            exit 1
+          }
+          Write-Host "packaged $zip"
+          echo "ZIP=$zip" >> $env:GITHUB_ENV
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zip-x64
+          path: ${{ env.ZIP }}
+          if-no-files-found: error
+
+  release:
+    needs: [check, build]
+    if: needs.check.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: zip-*
+          merge-multiple: true
+
+      # Single publish point. overwrite_files (NOT `overwrite`) repairs a tag
+      # whose zip asset is missing and replaces a racing same-name asset.
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check.outputs.tag }}
+          name: Yandex Browser Portable ${{ needs.check.outputs.yandex_ver }}
+          files: '*.zip'
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
