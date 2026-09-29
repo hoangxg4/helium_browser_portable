@@ -101,8 +101,8 @@ jobs:
       - name: Workflow files present
         run: |
           echo "==> Workflows"
-          # validate.yml pins itself; build.yml pin added by Task 6 (this
-          # step), smoke.yml pin later by Task 7.
+          # validate.yml pins itself; build.yml pin added by Task 6 and
+          # smoke.yml pin added by Task 7 (both in this step).
           if [ ! -f .github/workflows/validate.yml ]; then
             echo "  MISSING: .github/workflows/validate.yml"
             exit 1
@@ -113,3 +113,8 @@ jobs:
             exit 1
           fi
           echo "  OK: .github/workflows/build.yml"
+          if [ ! -f .github/workflows/smoke.yml ]; then
+            echo "  MISSING: .github/workflows/smoke.yml"
+            exit 1
+          fi
+          echo "  OK: .github/workflows/smoke.yml"

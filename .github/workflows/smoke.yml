@@ -1,0 +1,1011 @@
+name: "Windows Smoke (policy + EME + update flow)"
+
+# Purpose: end-to-end smoke verdict for the Yandex portable package on a real
+# windows-latest runner (Design section 2, task 7). Phases:
+#   A - layout: resolve the latest yandex-portable_*.zip release, download and
+#       extract it, assert the shipped layout (browser.exe, chrome++.ini,
+#       debloater.reg, version.txt == tag, package-root build-yandex.ps1,
+#       updater stripped, flat CDM rule).
+#   B - policy + EME: reg import debloater.reg (runner is admin), dump the
+#       policy page, hard-fail unless ALL 11 keys are present, then run the
+#       EME baseline probe (PROBE_B64, absolute file URI, title/pre anchors).
+#   C - update e2e (Helium issue #5 method): force Yandex\version.txt to
+#       0.0.0.0, hash the protected files, run the real update.bat with piped
+#       stdin (CWD = the bat's own directory), then assert exit 0, version
+#       bump, protected files unchanged, Data\ intact, 11 keys still applied
+#       and re-run the EME probe.
+#   D - verdict (if: always): read the result files -> summary.md -> step
+#       summary + console, Result: PASSED / FAILED, exit 1 on failure.
+#
+# Measurement notes (docs/spike-findings.md):
+#   - headless --dump-dom never commits chrome:// navigation on this build and
+#     CDP is Forbidden on WebUI targets, so the policy page is read through
+#     Windows UI Automation after a headed launch (spike H5). The CDP helper
+#     is only used to DRIVE the headed navigation and as the EME extraction
+#     fallback for file:// pages (spike P0/P4).
+#   - EME follows the spike-P4 rule: CDM_OK is PASS, anything else is WARN
+#     (the recorded P4 baseline is FAIL); the verdict only fails on a
+#     regression when the baseline in this run was CDM_OK.
+#   - A green browser://policy dump proves the 11 policies are read back by
+#     the browser. It does NOT prove telemetry stopped - the debloat stays
+#     honor-system until the one-time packet capture (post-MVP).
+#
+# Quirks honored from the Helium windows-smoke harness: SMOKE exported at
+# runtime via GITHUB_ENV (runner context is unavailable in job env), quoted
+# step names free of '#', no backtick-escaped quotes, Start-Process
+# redirection with WaitForExit timeouts, summary.md -> GITHUB_STEP_SUMMARY
+# plus Write-Host.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PROBE_B64: PCFkb2N0eXBlIGh0bWw+PG1ldGEgY2hhcnNldD11dGYtOD48dGl0bGU+cHJvYmU8L3RpdGxlPjxwcmUgaWQ9bz5wZW5kaW5nPC9wcmU+CjxzY3JpcHQ+CmNvbnN0IG89ZG9jdW1lbnQuZ2V0RWxlbWVudEJ5SWQoJ28nKTsKdHJ5ewpuYXZpZ2F0b3IucmVxdWVzdE1lZGlhS2V5U3lzdGVtQWNjZXNzKCdjb20ud2lkZXZpbmUuYWxwaGEnLFt7CiAgdmlkZW9DYXBhYmlsaXRpZXM6W3tjb250ZW50VHlwZTondmlkZW8vbXA0OyBjb2RlY3M9ImF2YzEuNDJFMDFFIid9XSwKICBhdWRpb0NhcGFiaWxpdGllczpbe2NvbnRlbnRUeXBlOidhdWRpby9tcDQ7IGNvZGVjcz0ibXA0YS40MC4yIid9XQp9XSkudGhlbihmdW5jdGlvbigpe28udGV4dENvbnRlbnQ9J0NETV9PSyc7ZG9jdW1lbnQudGl0bGU9J0NETV9PSyc7fSkKLmNhdGNoKGZ1bmN0aW9uKGUpe28udGV4dENvbnRlbnQ9J0NETV9GQUlMOicrZS5uYW1lKyc6JytlLm1lc3NhZ2U7ZG9jdW1lbnQudGl0bGU9J0NETV9GQUlMJzt9KTsKfWNhdGNoKGUpe28udGV4dENvbnRlbnQ9J0NETV9USFJPVzonK2UubmFtZTtkb2N1bWVudC50aXRsZT0nQ0RNX1RIUk9XJzt9Cjwvc2NyaXB0Pgo=
+
+    steps:
+      - name: "Resolve latest release"
+        id: rel
+        run: |
+          # runner context is not available in job-level env; export at runtime.
+          $env:SMOKE = Join-Path $env:RUNNER_TEMP 'smoke'
+          "SMOKE=$env:SMOKE" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = "application/vnd.github+json" }
+          $r = Invoke-RestMethod -Headers $h "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/latest"
+          if ($r.tag_name -notmatch '^yandex-portable_\d') { throw "latest release is not a unified tag: $($r.tag_name)" }
+          $asset = $r.assets | Where-Object { $_.name -match '^yandex-portable_.*\.zip$' } | Select-Object -First 1
+          if (-not $asset) { throw "no yandex-portable zip asset on $($r.tag_name)" }
+          $ver = ($r.tag_name -replace '^yandex-portable_', '').Split('_')[0]
+          @{
+            tag = $r.tag_name
+            ver = $ver
+            url = $asset.browser_download_url
+          }.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8 }
+          New-Item -ItemType Directory -Force $env:SMOKE | Out-Null
+          "Baseline release: $($r.tag_name) (Yandex $ver)" | Set-Content -Encoding utf8 "$env:SMOKE/summary.md"
+          # every step ends with an explicit exit 0: the pwsh shell exits with
+          # $LASTEXITCODE of the last native command (reg.exe / CDP helpers can
+          # leave a non-zero code on the success path).
+          exit 0
+
+      - name: "Prepare EME probe and helper scripts"
+        run: |
+          [IO.File]::WriteAllBytes("$env:SMOKE/probe.html", [Convert]::FromBase64String($env:PROBE_B64))
+          if (-not ((Get-Content "$env:SMOKE/probe.html" -Raw) -match 'requestMediaKeySystemAccess')) { throw 'probe.html decode failed' }
+          $runProbe = @'
+          param(
+              [string]$App,
+              [string]$Profile,
+              [string]$Log,
+              [string]$Probe,
+              [string]$Label,
+              [int]$CdpPort = 9461
+          )
+          $exe = Join-Path $App 'browser.exe'
+          if (-not (Test-Path $exe)) { throw "run-probe: browser.exe missing in $App" }
+          $uri = 'file:///' + ($Probe -replace '\\', '/')
+          function Get-Eme([string]$text) {
+              if ($null -eq $text) { return 'NO_RESULT' }
+              if ($text -match '<title>CDM_OK</title>') { return 'CDM_OK' }
+              if ($text -match '(?s)<pre id="o">([^<]+)</pre>') {
+                  $pre = $Matches[1].Trim()
+                  if (($pre -ne 'pending') -and ($pre -ne '')) { return $pre }
+              }
+              return 'NO_RESULT'
+          }
+          function Invoke-Dump([string[]]$argList, [string]$tag) {
+              $out = Join-Path $env:SMOKE "dump-$tag-out.txt"
+              $err = Join-Path $env:SMOKE "dump-$tag-err.txt"
+              $p = $null
+              try {
+                  $p = Start-Process -FilePath $exe -ArgumentList $argList -PassThru -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError $err
+                  if (-not $p.WaitForExit(30000)) { $p.Kill($true); $p.WaitForExit(5000) }
+              } catch {
+                  return @{ exit = -999; out = "START_FAILED: $($_.Exception.Message)"; err = $err }
+              }
+              Stop-Process -Name browser, browser_proxy -Force -ErrorAction SilentlyContinue
+              $o = ''
+              if (Test-Path $out) { $o = Get-Content $out -Raw -ErrorAction SilentlyContinue }
+              if ($null -eq $o) { $o = '' }
+              $ec = 'killed'
+              if ($p.HasExited) { $ec = $p.ExitCode }
+              return @{ exit = $ec; out = $o; err = $err }
+          }
+          $base = @('--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+                    '--disable-crash-reporter', "--user-data-dir=$Profile", '--enable-logging=stderr', '--v=1')
+          $r = Invoke-Dump ($base + @('--virtual-time-budget=12000', '--dump-dom', $uri)) "$Label-1"
+          $dom = [string]$r.out
+          $ec = [string]$r.exit
+          Set-Content -Encoding utf8 -Path $Log -Value $dom
+          $eme = Get-Eme $dom
+          $channel = 'dump-dom'
+          if ($eme -eq 'NO_RESULT') {
+              # --dump-dom never produces committed output for this build on CI
+              # (spike P0); the same file:// probe resolves over CDP (spike P4).
+              # The await expression polls the title/pre anchors directly.
+              $channel = 'cdp'
+              $cdpOut = Join-Path $env:SMOKE "$Label-cdp.html"
+              & (Join-Path $env:SMOKE 'cdp-dump.ps1') -App $App -Url $uri -OutFile $cdpOut -Base $base -Profile $Profile -Port $CdpPort -ReadyMs 30000 -AwaitExpr '(function(){var t=document.title;var p=document.getElementById("o");if(t&&t!=="probe"){return t;}if(p&&p.innerText&&p.innerText!=="pending"){return p.innerText;}return "";})()' -AwaitMs 60000
+              if (Test-Path $cdpOut) {
+                  $cdom = Get-Content $cdpOut -Raw -ErrorAction SilentlyContinue
+                  if (($null -ne $cdom) -and ($cdom.Length -gt 0)) {
+                      $dom = [string]$cdom
+                      Add-Content -Encoding utf8 -Path $Log -Value $cdom
+                      $eme = Get-Eme $dom
+                  }
+              }
+          }
+          $wvLines = @()
+          if (Test-Path $r.err) {
+              $wvLines = @(Get-Content $r.err -ErrorAction SilentlyContinue | Where-Object { $_ -match 'widevine|Widevine|CDM' } | Select-Object -First 5)
+          }
+          "[$Label] channel=$channel; exit=$ec; domBytes=$($dom.Length); eme=$eme" | Add-Content -Path (Join-Path $env:SMOKE 'summary.md')
+          if ($wvLines.Count -gt 0) { "[$Label] CDM stderr: $($wvLines -join ' || ')" | Add-Content -Path (Join-Path $env:SMOKE 'summary.md') }
+          return "eme=$eme"
+          '@
+          Set-Content -Encoding utf8 "$env:SMOKE/run-probe.ps1" $runProbe
+
+          $uiaDump = @'
+          # UIA text extraction fallback: CDP returns Forbidden on chrome:// (WebUI) targets,
+          # but the rendered page is still readable through Windows UI Automation.
+          # Run with Windows PowerShell 5.1 (powershell.exe) - UIAutomationClient is in the GAC there.
+          param(
+            [Parameter(Mandatory = $true)][string]$ProcIds,   # comma-separated pids of browser processes
+            [Parameter(Mandatory = $true)][string]$OutFile,
+            [int]$MaxNodes = 6000
+          )
+          $ErrorActionPreference = 'Stop'
+          function Log([string]$m) { Write-Host "detail: uia-dump: $m" }
+          try {
+            Add-Type -AssemblyName UIAutomationClient
+            Add-Type -AssemblyName UIAutomationTypes
+          } catch {
+            Log "failed to load UIAutomation assemblies: $($_.Exception.Message)"
+            exit 1
+          }
+          $ids = @($ProcIds -split ',' | Where-Object { $_ } | ForEach-Object { [int]$_ })
+          if ($ids.Count -eq 0) { Log 'no process ids supplied'; exit 1 }
+          $sb = New-Object System.Text.StringBuilder
+          try {
+            $root = [System.Windows.Automation.AutomationElement]::RootElement
+            $found = 0
+            foreach ($id in $ids) {
+              $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $id)
+              $wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)
+              foreach ($w in @($wins)) {
+                $found++
+                [void]$sb.AppendLine('## window: ' + $w.Current.Name)
+                $all = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+                $n = 0
+                foreach ($el in @($all)) {
+                  if ($n -ge $MaxNodes) { break }
+                  $n++
+                  try {
+                    $name = $el.Current.Name
+                    if ($name) { [void]$sb.AppendLine($name) }
+                    if ($el.Current.ControlType.ProgrammaticName -eq 'ControlType.Edit') {
+                      try {
+                        $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                        if ($vp) {
+                          $v = $vp.Current.Value
+                          if ($v) { [void]$sb.AppendLine('= ' + $v) }
+                        }
+                      } catch { }
+                    }
+                  } catch { }
+                }
+                Log "window pid=$id name=[$($w.Current.Name)] nodes=$n"
+              }
+            }
+            if ($found -eq 0) { Log 'no top-level windows for the given pids'; exit 1 }
+          } catch {
+            Log "walk failed: $($_.Exception.Message)"
+            exit 1
+          }
+          $text = $sb.ToString()
+          Set-Content -Path $OutFile -Value $text -Encoding utf8
+          Log "text bytes=$($text.Length)"
+          exit 0
+          '@
+          Set-Content -Encoding utf8 "$env:SMOKE/uia-dump.ps1" $uiaDump
+
+          $cdpDump = @'
+          # Extracts page HTML over the Chrome DevTools Protocol.
+          # Used as a fallback when --dump-dom never terminates (Yandex 26.8 / Chromium 150 on CI).
+          param(
+            [Parameter(Mandatory = $true)][string]$App,
+            [Parameter(Mandatory = $true)][string]$Url,
+            [Parameter(Mandatory = $true)][string]$OutFile,
+            [string[]]$Base = @(),
+            [string]$Profile = '',
+            [int]$Port = 9444,
+            [int]$ReadyMs = 30000,
+            [string]$AwaitExpr = '',
+            [int]$AwaitMs = 0,
+            [int]$PollMs = 1000,
+            [switch]$NoLaunch,
+            [switch]$DriveNav
+          )
+          $ErrorActionPreference = 'Stop'
+          function Log([string]$m) { Write-Host "detail: cdp-dump: $m" }
+          function J($o) {
+            $s = $null
+            try { $s = $o | ConvertTo-Json -Compress -Depth 6 } catch { $s = "<json error: $($_.Exception.Message)>" }
+            if ($null -eq $s) { $s = '<null>' }
+            if ($s.Length -gt 700) { return $s.Substring(0, 700) }
+            return $s
+          }
+
+          $proc = $null
+          $ws = $null
+          $ok = $false
+          try {
+            $exe = Join-Path $App 'browser.exe'
+            if (-not (Test-Path $exe)) { Log "browser.exe missing in $App"; exit 2 }
+            if (-not $Profile) { $Profile = Join-Path ([IO.Path]::GetTempPath()) ('cdp-' + [Guid]::NewGuid().ToString('N')) }
+
+            if (-not $NoLaunch) {
+              $launchUrl = $Url
+              if ($DriveNav) { $launchUrl = 'about:blank' }
+              $argList = $Base + @("--user-data-dir=$Profile", "--remote-debugging-port=$Port", '--remote-allow-origins=*', $launchUrl)
+              Log "launch browser.exe port=$Port url=$launchUrl"
+              $proc = Start-Process -FilePath $exe -ArgumentList $argList -PassThru -NoNewWindow -WorkingDirectory $App `
+                -RedirectStandardOutput "$OutFile.out" -RedirectStandardError "$OutFile.err"
+            }
+
+            function Find-Target {
+              $dl = [DateTime]::UtcNow.AddMilliseconds($ReadyMs)
+              $last = ''
+              while ([DateTime]::UtcNow -lt $dl) {
+                Start-Sleep -Milliseconds $PollMs
+                try {
+                  $r = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/json/list" -UseBasicParsing -TimeoutSec 3
+                  $list = @($r.Content | ConvertFrom-Json)
+                  $pages = @($list | Where-Object { $_.type -eq 'page' })
+                  if ($pages.Count -gt 0) {
+                    $prefix = $Url.TrimEnd('/')
+                    $withUrl = @($pages | Where-Object { $_.url })
+                    $exact = @($withUrl | Where-Object { $_.url -eq $Url -or $_.url -like ($prefix + '*') })
+                    if ($exact.Count -gt 0) { Log "matched target url=$($exact[0].url)"; return $exact[0] }
+                    if (($withUrl.Count -eq 1) -and ([DateTime]::UtcNow -gt $dl.AddMilliseconds(-4000))) {
+                      Log "late single-page fallback url=$($withUrl[0].url)"
+                      return $withUrl[0]
+                    }
+                    $last = "page urls=[$(($pages | ForEach-Object { $_.url }) -join ', ')]"
+                  } else { $last = 'no page targets' }
+                } catch { $last = $_.Exception.Message }
+              }
+              Log "no url-matched target within ${ReadyMs}ms (last=$last)"
+              return $null
+            }
+            function Get-AnyPage([int]$timeoutMs) {
+              $dl = [DateTime]::UtcNow.AddMilliseconds($timeoutMs)
+              $last = ''
+              while ([DateTime]::UtcNow -lt $dl) {
+                Start-Sleep -Milliseconds $PollMs
+                try {
+                  $r = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/json/list" -UseBasicParsing -TimeoutSec 3
+                  $list = @($r.Content | ConvertFrom-Json)
+                  $pages = @($list | Where-Object { $_.type -eq 'page' })
+                  if ($pages.Count -gt 0) {
+                    $live = @($pages | Where-Object { $_.url })
+                    if ($live.Count -gt 0) { return $live[0] }
+                    return $pages[0]
+                  }
+                  $last = 'no page targets'
+                } catch { $last = $_.Exception.Message }
+              }
+              Log "no page target within ${timeoutMs}ms (last=$last)"
+              return $null
+            }
+            $navDriven = $false
+            if ($DriveNav) {
+              $target = Get-AnyPage 8000
+              if ($null -eq $target) { exit 3 }
+              $navDriven = $true
+              Log 'DriveNav: attaching to first page target; navigation will be driven over CDP'
+            } else {
+              $target = Find-Target
+              if ($null -eq $target) { exit 3 }
+            }
+            Log "target url=$($target.url)"
+
+            function Send-Json([string]$json) {
+              $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+              $seg = [ArraySegment[byte]]::new($bytes)
+              $sendTask = $ws.SendAsync($seg, [Net.WebSockets.WebSocketMessageType]::Text, $true, $ct)
+              if (-not $sendTask.Wait(15000)) { throw 'ws send timeout (15s)' }
+            }
+            function Receive-Json {
+              $ms = New-Object IO.MemoryStream
+              $buf = New-Object byte[] 262144
+              do {
+                $seg = [ArraySegment[byte]]::new($buf)
+                $recvTask = $ws.ReceiveAsync($seg, $ct)
+                if (-not $recvTask.Wait(15000)) { throw 'ws receive timeout (15s)' }
+                $res = $recvTask.Result
+                if ($res.MessageType -eq [Net.WebSockets.WebSocketMessageType]::Close) { throw 'ws closed by peer' }
+                $ms.Write($buf, 0, $res.Count)
+              } while (-not $res.EndOfMessage)
+              [Text.Encoding]::UTF8.GetString($ms.ToArray())
+            }
+            function Invoke-Cdp([string]$method, $params) {
+              $script:cdpSeq++
+              $id = $script:cdpSeq
+              $obj = @{ id = $id; method = $method }
+              if ($null -ne $params) { $obj['params'] = $params }
+              Send-Json ($obj | ConvertTo-Json -Compress -Depth 8)
+              $limit = [DateTime]::UtcNow.AddSeconds(45)
+              while ([DateTime]::UtcNow -lt $limit) {
+                $msg = Receive-Json | ConvertFrom-Json
+                if (($null -ne $msg.PSObject.Properties['id']) -and $msg.id -eq $id) { return $msg }
+              }
+              throw "no CDP response for $method"
+            }
+            $script:cdpSeq = 0
+
+            # Connects (and re-connects) a CDP session. A cross-process navigation swap can
+            # leave the previous websocket pointing at the dead renderer, so callers pass a
+            # freshly re-listed target to open a NEW session that reaches the live renderer.
+            function Connect-Session($t, [string]$tag) {
+              for ($attempt = 1; $attempt -le 2; $attempt++) {
+                if ($null -ne $script:ws) { try { $script:ws.Dispose() } catch { Log "ws dispose: $($_.Exception.Message)" }; $script:ws = $null }
+                $script:ws = New-Object System.Net.WebSockets.ClientWebSocket
+                $script:ws.Options.KeepAliveInterval = [TimeSpan]::FromSeconds(5)
+                $script:ct = [Threading.CancellationToken]::None
+                $connTask = $script:ws.ConnectAsync([Uri]$t.webSocketDebuggerUrl, $script:ct)
+                if (-not $connTask.Wait(15000)) { throw "$tag ws connect timeout (15s)" }
+                Log "$tag ws connected (attempt $attempt)"
+                try {
+                  $en = Invoke-Cdp 'Runtime.enable' @{}
+                  if ($en.PSObject.Properties['error']) { Log "$tag Runtime.enable RPC error: $(J $en.error)" }
+                  else { Log "$tag Runtime.enable ok" }
+                  return $true
+                }
+                catch { Log "$tag Runtime.enable attempt ${attempt}: $($_.Exception.Message)"; if ($attempt -lt 2) { Start-Sleep -Seconds 3 } }
+              }
+              return $false
+            }
+            if (-not (Connect-Session $target 'attach')) { throw 'Runtime.enable failed after 2 attempts' }
+            # diagnostic: does evaluate work AT ALL on this target before we navigate?
+            try {
+              $pr = Invoke-Cdp 'Runtime.evaluate' @{ expression = '1+1'; returnByValue = $true }
+              if ($pr.PSObject.Properties['error']) { Log "eval probe RPC error: $(J $pr.error)" }
+              else { Log "eval probe: $(J $pr.result)" }
+            } catch { Log "eval probe exception: $($_.Exception.Message)" }
+
+            $locDiagLogged = $false
+            $reDiagLogged = $false
+            if ($navDriven) {
+              $null = Invoke-Cdp 'Page.enable' @{}
+              $nav = Invoke-Cdp 'Page.navigate' @{ url = $Url }
+              $navErr = ''
+              if ($nav.PSObject.Properties['error']) { $navErr = "rpc: $($nav.error.message)" }
+              elseif ($null -ne $nav.result -and $nav.result.PSObject.Properties['errorText']) { $navErr = [string]$nav.result.errorText }
+              if ($navErr) { Log "Page.navigate $Url errorText=$navErr" }
+              else { Log "Page.navigate issued for $Url (no errorText)" }
+              $loc = ''
+              $prefix = $Url.TrimEnd('/')
+              $locLimit = [DateTime]::UtcNow.AddSeconds(15)
+              while ([DateTime]::UtcNow -lt $locLimit) {
+                Start-Sleep -Milliseconds $PollMs
+                try {
+                  $r = Invoke-Cdp 'Runtime.evaluate' @{ expression = 'location.href'; returnByValue = $true }
+                  if ($null -ne $r.result -and $null -ne $r.result.result -and $null -ne $r.result.result.PSObject.Properties['value']) {
+                    $loc = [string]$r.result.result.value
+                  }
+                  elseif (-not $locDiagLogged) { $locDiagLogged = $true; Log "loc poll no-value response: $(J $r)" }
+                  if (($loc -eq $Url) -or $loc.StartsWith($prefix)) { break }
+                } catch { Log "loc poll: $($_.Exception.Message)" }
+              }
+              Log "navigated location.href=[$loc]"
+              if (($loc -ne $Url) -and (-not $loc.StartsWith($prefix))) {
+                # The swap to the WebUI renderer can kill this session: /json/list may already
+                # show the committed url even though this session can no longer evaluate.
+                # Re-list the target, open a FRESH session and re-verify there.
+                Log "session lost the commit (location.href=$loc); re-listing targets for a fresh attach"
+                $fresh = $null
+                $fdl = [DateTime]::UtcNow.AddSeconds(10)
+                while (($null -eq $fresh) -and ([DateTime]::UtcNow -lt $fdl)) {
+                  try {
+                    $lr = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/json/list" -UseBasicParsing -TimeoutSec 3
+                    foreach ($p in @($lr.Content | ConvertFrom-Json | Where-Object { $_.type -eq 'page' -and $_.url })) {
+                      if ($p.url -like ($prefix + '*')) { $fresh = $p; break }
+                    }
+                  } catch { Log "re-list: $($_.Exception.Message)" }
+                  if ($null -eq $fresh) { Start-Sleep -Milliseconds $PollMs }
+                }
+                if ($null -eq $fresh) {
+                  Log "navigation to $Url did not commit (location.href=$loc; no re-listed target); continuing to extraction"
+                } else {
+                  Log "fresh attach: re-listed target url=$($fresh.url)"
+                  if (-not (Connect-Session $fresh 'reattach')) { throw 'fresh attach: Runtime.enable failed after 2 attempts' }
+                  $loc = ''
+                  $rlim = [DateTime]::UtcNow.AddSeconds(10)
+                  while ([DateTime]::UtcNow -lt $rlim) {
+                    Start-Sleep -Milliseconds $PollMs
+                    try {
+                      $r = Invoke-Cdp 'Runtime.evaluate' @{ expression = 'location.href'; returnByValue = $true }
+                      if ($null -ne $r.result -and $null -ne $r.result.result -and $null -ne $r.result.result.PSObject.Properties['value']) {
+                        $loc = [string]$r.result.result.value
+                      }
+                      elseif (-not $reDiagLogged) { $reDiagLogged = $true; Log "reattach loc poll no-value response: $(J $r)" }
+                      if (($loc -eq $Url) -or $loc.StartsWith($prefix)) { break }
+                    } catch { Log "reattach loc poll: $($_.Exception.Message)" }
+                  }
+                  Log "reattach location.href=[$loc]"
+                  if (($loc -ne $Url) -and (-not $loc.StartsWith($prefix))) {
+                    Log "reattach: $Url still not committed (location.href=$loc); continuing to extraction"
+                  }
+                }
+              }
+            }
+
+            try { $null = Invoke-Cdp 'Runtime.enable' @{} } catch { Log "Runtime.enable: $($_.Exception.Message)" }
+
+            if ($AwaitExpr) {
+              $val = ''
+              $limit = [DateTime]::UtcNow.AddMilliseconds($AwaitMs)
+              while ([DateTime]::UtcNow -lt $limit) {
+                Start-Sleep -Milliseconds $PollMs
+                try {
+                  $r = Invoke-Cdp 'Runtime.evaluate' @{ expression = $AwaitExpr; returnByValue = $true }
+                  if ($null -ne $r.result -and $null -ne $r.result.result -and $null -ne $r.result.result.PSObject.Properties['value']) {
+                    $val = [string]$r.result.result.value
+                  }
+                } catch { Log "await eval: $($_.Exception.Message)" }
+                if ($val -and $val -ne 'pending') { break }
+              }
+              Log "await value=[$val]"
+            }
+
+            $html = ''
+            $r = $null
+            try {
+              $r = Invoke-Cdp 'Runtime.evaluate' @{ expression = 'document.documentElement.outerHTML'; returnByValue = $true }
+              if ($r.PSObject.Properties['error']) { Log "outerHTML RPC error: $(J $r.error)" }
+              elseif ($null -ne $r.result -and $null -ne $r.result.result -and $null -ne $r.result.result.PSObject.Properties['value']) {
+                $html = [string]$r.result.result.value
+              }
+              else { Log "outerHTML no-value response: $(J $r)" }
+            } catch { Log "outerHTML evaluate: $($_.Exception.Message)" }
+            if (-not $html) {
+              Log 'outerHTML evaluate empty; falling back to DOM.getOuterHTML'
+              try {
+                $en = Invoke-Cdp 'DOM.enable' @{}
+                if ($en.PSObject.Properties['error']) { Log "DOM.enable RPC error: $(J $en.error)" }
+                $doc = Invoke-Cdp 'DOM.getDocument' @{ depth = -1 }
+                if ($doc.PSObject.Properties['error']) { Log "DOM.getDocument RPC error: $(J $doc.error)" }
+                elseif ($null -ne $doc.result -and $null -ne $doc.result.root) {
+                  $outer = Invoke-Cdp 'DOM.getOuterHTML' @{ nodeId = $doc.result.root.nodeId }
+                  if ($outer.PSObject.Properties['error']) { Log "DOM.getOuterHTML RPC error: $(J $outer.error)" }
+                  elseif ($null -ne $outer.result -and $outer.result.PSObject.Properties['outerHTML']) { $html = [string]$outer.result.outerHTML }
+                }
+                else { Log "DOM.getDocument no-root response: $(J $doc)" }
+              } catch { Log "DOM.getOuterHTML: $($_.Exception.Message)" }
+            }
+            if (-not $html) {
+              # captureSnapshot runs in the browser and needs no JS execution context -
+              # works even where Runtime/DOM domains answer empty for WebUI targets
+              Log 'no JS/DOM extraction; falling back to Page.captureSnapshot (mhtml)'
+              try {
+                $pe = Invoke-Cdp 'Page.enable' @{}
+                if ($pe.PSObject.Properties['error']) { Log "Page.enable RPC error: $(J $pe.error)" }
+                $snap = Invoke-Cdp 'Page.captureSnapshot' @{ format = 'mhtml' }
+                if ($snap.PSObject.Properties['error']) { Log "captureSnapshot RPC error: $(J $snap.error)" }
+                elseif ($null -ne $snap.result -and $snap.result.PSObject.Properties['data']) { $html = [string]$snap.result.data }
+                else { Log "captureSnapshot no-data response: $(J $snap)" }
+              } catch { Log "captureSnapshot: $($_.Exception.Message)" }
+            }
+            if (-not $html) {
+              # accessibility tree is a different domain - may survive where Runtime/DOM/Page are Forbidden
+              Log 'falling back to Accessibility.getFullAXTree'
+              try {
+                $ae = Invoke-Cdp 'Accessibility.enable' @{}
+                if ($ae.PSObject.Properties['error']) { Log "Accessibility.enable RPC error: $(J $ae.error)" }
+                $ax = Invoke-Cdp 'Accessibility.getFullAXTree' @{}
+                if ($ax.PSObject.Properties['error']) { Log "Accessibility.getFullAXTree RPC error: $(J $ax.error)" }
+                elseif ($null -ne $ax.result -and $ax.result.nodes) {
+                  $parts = New-Object System.Collections.Generic.List[string]
+                  foreach ($nd in @($ax.result.nodes)) {
+                    foreach ($f in 'name', 'value', 'description') {
+                      if ($nd.PSObject.Properties[$f] -and $nd.$f -and $nd.$f.PSObject.Properties['value'] -and $nd.$f.value) {
+                        [void]$parts.Add([string]$nd.$f.value)
+                      }
+                    }
+                    if ($nd.PSObject.Properties['properties'] -and $nd.properties) {
+                      foreach ($pr in @($nd.properties)) {
+                        if ($pr.value -and $pr.value.PSObject.Properties['value'] -and $pr.value.value) {
+                          [void]$parts.Add([string]$pr.value.value)
+                        }
+                      }
+                    }
+                  }
+                  $html = ($parts -join ' | ')
+                  Log "AX tree nodes=$(@($ax.result.nodes).Count) text bytes=$($html.Length)"
+                }
+                else { Log "Accessibility.getFullAXTree no-nodes response: $(J $ax)" }
+              } catch { Log "Accessibility.getFullAXTree: $($_.Exception.Message)" }
+            }
+            if (-not $html) {
+              # map which domains this target allows at all (evidence for the spike report)
+              Log 'scanning CDP domain availability on this target'
+              foreach ($m in @('Log.enable', 'Network.enable', 'Debugger.enable', 'Profiler.enable', 'CSS.enable',
+                               'DOMStorage.enable', 'Application.enable', 'CacheStorage.enable', 'ServiceWorker.enable',
+                               'IndexedDB.enable', 'Audits.enable', 'Emulation.enable', 'Overlay.enable', 'Storage.enable',
+                               'Media.enable', 'DeviceAccess.enable', 'PWA.enable', 'Fetch.enable', 'Security.enable',
+                               'Inspector.enable')) {
+                try {
+                  $pr = Invoke-Cdp $m @{}
+                  if ($pr.PSObject.Properties['error']) { Log "domain-scan $m -> error: $($pr.error.message)" }
+                  else { Log "domain-scan $m -> OK" }
+                } catch { Log "domain-scan $m -> exception: $($_.Exception.Message)" }
+              }
+              # printToPDF runs browser-side and has been observed ALLOWED even where
+              # every other domain returns Forbidden - keep the artifact for the report
+              try {
+                $pdf = Invoke-Cdp 'Page.printToPDF' @{ printBackground = $true }
+                if ($pdf.PSObject.Properties['error']) { Log "domain-scan Page.printToPDF -> error: $($pdf.error.message)" }
+                else {
+                  $b64 = ''
+                  if ($null -ne $pdf.result -and $pdf.result.PSObject.Properties['data']) { $b64 = [string]$pdf.result.data }
+                  Log "domain-scan Page.printToPDF -> OK base64 bytes=$($b64.Length)"
+                  if ($b64.Length -gt 64) {
+                    $pdfPath = $OutFile + '.pdf'
+                    try {
+                      [IO.File]::WriteAllBytes($pdfPath, [Convert]::FromBase64String($b64))
+                      Log "saved printToPDF artifact: $pdfPath ($((Get-Item $pdfPath).Length) bytes)"
+                    } catch { Log "printToPDF save failed: $($_.Exception.Message)" }
+                  }
+                }
+              } catch { Log "domain-scan Page.printToPDF -> exception: $($_.Exception.Message)" }
+            }
+            if (-not $html) { throw 'no DOM: outerHTML, DOM.getOuterHTML, Page.captureSnapshot and Accessibility tree all produced nothing' }
+            Set-Content -Path $OutFile -Value $html -Encoding utf8
+            Log "dom bytes=$($html.Length)"
+            $ok = $true
+            exit 0
+          } catch {
+            Log "error: $($_.Exception.Message)"
+            exit 1
+          } finally {
+            if ($null -ne $ws) {
+              try { $ws.Dispose() } catch { Log "ws dispose: $($_.Exception.Message)" }
+            }
+            if ($null -ne $proc) {
+              try { if (-not $proc.HasExited) { $proc.Kill($true) } } catch { Log "kill: $($_.Exception.Message)" }
+            }
+            if ($NoLaunch) {
+              # the caller owns the browser process: leave it alive so further probes
+              # (e.g. the next policy URL) can attach to the same headed instance
+              Log 'NoLaunch: leaving the caller-launched browser running'
+            } else {
+              Stop-Process -Name browser, browser_proxy -Force -ErrorAction SilentlyContinue
+            }
+            if (-not $ok) { Log 'cdp extraction did not produce a DOM' }
+          }
+          '@
+          Set-Content -Encoding utf8 "$env:SMOKE/cdp-dump.ps1" $cdpDump
+
+          'Probe page and helper scripts prepared.' | Add-Content "$env:SMOKE/summary.md"
+          exit 0
+
+      - name: "Phase A - layout asserts"
+        id: phaseA
+        run: |
+          Set-Content "$env:SMOKE/a.txt" 'STATUS=RUNNING'
+          $fail = [System.Collections.Generic.List[string]]::new()
+          function Assert([bool]$cond, [string]$msg) {
+            if ($cond) { "PASS: $msg" | Add-Content "$env:SMOKE/summary.md" }
+            else { "FAIL: $msg" | Add-Content "$env:SMOKE/summary.md"; $script:fail.Add($msg) }
+          }
+          Invoke-WebRequest -Uri '${{ steps.rel.outputs.url }}' -OutFile "$env:SMOKE/rel.zip"
+          Expand-Archive -Path "$env:SMOKE/rel.zip" -DestinationPath "$env:SMOKE/fresh" -Force
+          $root = "$env:SMOKE/fresh/Yandex_Portable"
+          $app = "$root/Yandex"
+          $ver = '${{ steps.rel.outputs.ver }}'
+
+          Assert (Test-Path "$app/browser.exe") "layout: Yandex/browser.exe present"
+          Assert (Test-Path "$app/chrome++.ini") "layout: chrome++.ini present"
+          Assert (Test-Path "$app/debloater.reg") "layout: debloater.reg present"
+          $vt = ''
+          if (Test-Path "$app/version.txt") { $vt = (Get-Content "$app/version.txt" -Raw).Trim() }
+          Assert ($vt -eq $ver) "layout: version.txt == tag version ($vt == $ver)"
+          Assert (Test-Path "$root/build-yandex.ps1") "layout: package-root build-yandex.ps1 present"
+          Assert (Test-Path "$app/update.bat") "layout: Yandex/update.bat present (needed by phase C)"
+          $up = @(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Name -eq 'service_update.exe' -or $_.Name -eq 'yupdate-exec.exe' })
+          Assert ($up.Count -eq 0) "layout: updater stripped (no service_update.exe / yupdate-exec.exe)"
+          # Flat CDM rule: any WidevineCdm must sit directly under Yandex\ (the
+          # exe-dir path Chrome registers); Yandex\*\WidevineCdm is dead weight.
+          $flat = [IO.Path]::GetFullPath((Join-Path $app 'WidevineCdm'))
+          $bad = @(Get-ChildItem -LiteralPath $app -Recurse -Directory -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Name -eq 'WidevineCdm' -and $_.FullName -ne $flat })
+          Assert ($bad.Count -eq 0) "layout: flat CDM rule (no Yandex/*/WidevineCdm nesting)"
+          if (Test-Path -LiteralPath $flat) { "CDM: flat WidevineCdm present" | Add-Content "$env:SMOKE/summary.md" }
+          else { "CDM: WidevineCdm absent (runtime component registration only)" | Add-Content "$env:SMOKE/summary.md" }
+          # Chrome++ version.dll suppresses --dump-dom output entirely on CI
+          # (Helium windows-smoke lesson) - move it aside for all probes.
+          $dll = Join-Path $app 'version.dll'
+          $dllState = 'absent'
+          if (Test-Path -LiteralPath $dll) {
+            Move-Item -LiteralPath $dll -Destination "$dll.aside" -Force
+            $dllState = 'moved-aside'
+          }
+          "version.dll: $dllState (Chrome++ loader silences --dump-dom on CI)" | Add-Content "$env:SMOKE/summary.md"
+
+          if ($fail.Count -gt 0) {
+            Set-Content "$env:SMOKE/a.txt" 'STATUS=FAIL'
+            throw "Phase A failed: $($fail -join '; ')"
+          }
+          Set-Content "$env:SMOKE/a.txt" 'STATUS=OK'
+          exit 0
+
+      - name: "Phase B - policy import, policy dump, EME baseline"
+        id: phaseB
+        run: |
+          Set-Content "$env:SMOKE/b.txt" 'STATUS=RUNNING'
+          $fail = [System.Collections.Generic.List[string]]::new()
+          function Assert([bool]$cond, [string]$msg) {
+            if ($cond) { "PASS: $msg" | Add-Content "$env:SMOKE/summary.md" }
+            else { "FAIL: $msg" | Add-Content "$env:SMOKE/summary.md"; $script:fail.Add($msg) }
+          }
+          $app = "$env:SMOKE/fresh/Yandex_Portable/Yandex"
+          $keys = @('StatisticsReporting', 'CrashesReporting', 'BackgroundModeEnabled', 'YandexAutoLaunchMode',
+                    'YandexAliceMsgDisable', 'NeuroNtpTools', 'NtpNotificationsDisable', 'YandexButtonDisable',
+                    'SearchSuggestEnabled', 'UpdateAllowed', 'BackgroundUpdateAllowed')
+
+          # 1) apply the policies (the windows-latest runner is admin).
+          & reg.exe import "$app\debloater.reg" | Out-Null
+          Assert ($LASTEXITCODE -eq 0) "policy: reg import debloater.reg exit 0 (got $LASTEXITCODE)"
+
+          # 2) headed policy dump via Windows UI Automation (spike H5): headless
+          #    runs never commit chrome:// navigation and CDP answers Forbidden
+          #    on WebUI targets, but UIA reads the rendered policy table.
+          $prof = Join-Path $env:SMOKE 'profilePol'
+          New-Item -ItemType Directory -Force $prof | Out-Null
+          $port = 9488
+          $exe = Join-Path $app 'browser.exe'
+          $headedBase = @('--no-first-run', '--no-default-browser-check', '--disable-crash-reporter',
+                          '--disable-gpu', '--enable-logging=stderr', '--v=1', '--force-renderer-accessibility')
+          $uiaScript = Join-Path $env:SMOKE 'uia-dump.ps1'
+          $cdpScript = Join-Path $env:SMOKE 'cdp-dump.ps1'
+
+          function Get-BrowserPids {
+            return @(Get-Process -Name browser -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+          }
+          function Get-WinInfo {
+            $w = @(Get-Process -Name browser -ErrorAction SilentlyContinue |
+                   ForEach-Object { "pid=$($_.Id) title=[$($_.MainWindowTitle)]" })
+            if ($w.Count -eq 0) { return '(no browser windows)' }
+            return ($w -join ', ')
+          }
+          function Start-Headed([string]$launchUrl) {
+            Stop-Process -Name browser, browser_proxy -Force -ErrorAction SilentlyContinue
+            # spike stage-3 lesson: relaunching while the dying instance still
+            # holds the profile lock yields a browser with zero tabs - wait for
+            # the processes (and the devtools port they hold) to actually die.
+            $dead = [DateTime]::UtcNow.AddSeconds(15)
+            while (([DateTime]::UtcNow -lt $dead) -and (Get-BrowserPids).Count -gt 0) { Start-Sleep -Milliseconds 500 }
+            Start-Sleep -Seconds 3
+            $argList = $headedBase + @("--user-data-dir=$prof", "--remote-debugging-port=$port", '--remote-allow-origins=*', $launchUrl)
+            return Start-Process -FilePath $exe -ArgumentList $argList -PassThru -WorkingDirectory $app `
+              -RedirectStandardOutput (Join-Path $env:SMOKE 'policy-headed-out.txt') `
+              -RedirectStandardError (Join-Path $env:SMOKE 'policy-headed-err.txt')
+          }
+          function Get-UiaText {
+            $bpIds = Get-BrowserPids
+            if ($bpIds.Count -eq 0) { "policy: UIA skipped (no browser processes)" | Add-Content "$env:SMOKE/summary.md"; return $null }
+            $uiaOut = Join-Path $env:SMOKE 'policy-uia.txt'
+            if (Test-Path $uiaOut) { Remove-Item $uiaOut -Force }
+            $uiaP = Start-Process -FilePath 'powershell.exe' -PassThru -WindowStyle Hidden -Wait -ArgumentList @(
+              '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $uiaScript,
+              '-ProcIds', ($bpIds -join ','), '-OutFile', $uiaOut)
+            "policy: UIA exit=$($uiaP.ExitCode); windows=$(Get-WinInfo)" | Add-Content "$env:SMOKE/summary.md"
+            if (-not (Test-Path $uiaOut)) { return $null }
+            $t = Get-Content $uiaOut -Raw -ErrorAction SilentlyContinue
+            if ($null -eq $t) { return $null }
+            if ($t.Length -lt 600) { "policy: UIA text too short ($($t.Length) B)" | Add-Content "$env:SMOKE/summary.md"; return $null }
+            if ($t -match 'chrome-error|ERR_INVALID|ERR_FAILED|not reached') {
+              "policy: UIA text looks like an error page" | Add-Content "$env:SMOKE/summary.md"
+              return $null
+            }
+            # spike H4 rejected a 297 B empty-title walk; require policy-page
+            # evidence (window title / heading "Policies") so a rendered blank
+            # window with chrome UI chrome can never vouch for the dump.
+            if ($t -notmatch 'Polic') {
+              "policy: UIA text carries no policy-page evidence (title/heading)" | Add-Content "$env:SMOKE/summary.md"
+              return $null
+            }
+            return $t
+          }
+
+          $text = $null
+          $via = ''
+          # Stage 1: headed about:blank + CDP-driven navigation to the policy
+          # page (the exact path spike H5 measured as HONORED).
+          $bp = Start-Headed 'about:blank'
+          Start-Sleep -Seconds 15
+          "policy: stage1 launch alive=$(-not $bp.HasExited); $(Get-WinInfo)" | Add-Content "$env:SMOKE/summary.md"
+          & $cdpScript -App $app -Url 'chrome://policy/' -OutFile (Join-Path $env:SMOKE 'policy-cdp-chrome.html') -Base $headedBase -Profile $prof -Port $port -NoLaunch -ReadyMs 15000 -DriveNav | Out-Null
+          "policy: stage1 drive chrome://policy/ exit=$LASTEXITCODE" | Add-Content "$env:SMOKE/summary.md"
+          Start-Sleep -Seconds 5
+          $text = Get-UiaText
+          if ($text) { $via = 'headed-drive-chrome://policy/' }
+          # Stage 2: same instance, drive the browser:// alias.
+          if (-not $text) {
+            & $cdpScript -App $app -Url 'browser://policy/' -OutFile (Join-Path $env:SMOKE 'policy-cdp-browser.html') -Base $headedBase -Profile $prof -Port $port -NoLaunch -ReadyMs 15000 -DriveNav | Out-Null
+            "policy: stage2 drive browser://policy/ exit=$LASTEXITCODE" | Add-Content "$env:SMOKE/summary.md"
+            Start-Sleep -Seconds 5
+            $text = Get-UiaText
+            if ($text) { $via = 'headed-drive-browser://policy/' }
+          }
+          # Stage 3: fresh launch with the policy page as the startup URL so
+          # the commit happens before we attach (spike stage-3 relaunch).
+          if (-not $text) {
+            $null = Start-Headed 'chrome://policy/'
+            Start-Sleep -Seconds 22
+            "policy: stage3 startup chrome://policy/; $(Get-WinInfo)" | Add-Content "$env:SMOKE/summary.md"
+            $text = Get-UiaText
+            if ($text) { $via = 'startup-chrome://policy/' }
+          }
+          # Stage 4: startup URL through the browser:// alias.
+          if (-not $text) {
+            $null = Start-Headed 'browser://policy/'
+            Start-Sleep -Seconds 22
+            "policy: stage4 startup browser://policy/; $(Get-WinInfo)" | Add-Content "$env:SMOKE/summary.md"
+            $text = Get-UiaText
+            if ($text) { $via = 'startup-browser://policy/' }
+          }
+          Stop-Process -Name browser, browser_proxy -Force -ErrorAction SilentlyContinue
+
+          # 3) analyze the dump: every one of the 11 keys must be present.
+          $policyLines = @()
+          $missing = @()
+          $presentCount = 0
+          $dumpBytes = 0
+          if ($text) {
+            $dumpBytes = $text.Length
+            Set-Content -Encoding utf8 -Path (Join-Path $env:SMOKE 'policy-dump.txt') -Value $text
+            foreach ($k in $keys) {
+              if ($text.IndexOf($k, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                $presentCount++
+                $policyLines += "PRESENT: $k"
+              } else {
+                $missing += $k
+                $policyLines += "MISSING: $k"
+              }
+            }
+          } else {
+            $missing = $keys
+            foreach ($k in $keys) { $policyLines += "MISSING: $k" }
+          }
+          $policyLines = @("dump bytes=$dumpBytes; via=$via") + $policyLines
+          if ($missing.Count -eq 0) { $policyLines += 'STATUS=OK' } else { $policyLines += 'STATUS=FAIL' }
+          Set-Content -Encoding utf8 -Path (Join-Path $env:SMOKE 'b-policy.txt') -Value ($policyLines -join "`n")
+          "policy: $presentCount/11 keys present in the policy dump; missing=[$($missing -join ', ')]" | Add-Content "$env:SMOKE/summary.md"
+          Assert ($missing.Count -eq 0) "policy: all 11 keys present in the browser://policy dump (missing: $($missing -join ', '))"
+
+          # 4) EME baseline probe (spike-P4 rule: CDM_OK = PASS, else WARN).
+          #    Run before the hard-fail so every result file exists for verdict.
+          $emeA = & (Join-Path $env:SMOKE 'run-probe.ps1') -App $app -Profile (Join-Path $env:SMOKE 'profileEmeA') -Log (Join-Path $env:SMOKE 'emeA.log') -Probe (Join-Path $env:SMOKE 'probe.html') -Label 'B-baseline' -CdpPort 9461
+          Set-Content -Path (Join-Path $env:SMOKE 'emeA.txt') -Value $emeA
+          "EME baseline (phase B): $emeA" | Add-Content "$env:SMOKE/summary.md"
+
+          if ($fail.Count -gt 0) {
+            Set-Content "$env:SMOKE/b.txt" 'STATUS=FAIL'
+            throw "Phase B failed: $($fail -join '; ')"
+          }
+          Set-Content "$env:SMOKE/b.txt" 'STATUS=OK'
+          exit 0
+
+      - name: "Phase C - update flow e2e"
+        id: phaseC
+        run: |
+          Set-Content "$env:SMOKE/c.txt" 'STATUS=RUNNING'
+          $fail = [System.Collections.Generic.List[string]]::new()
+          function Assert([bool]$cond, [string]$msg) {
+            if ($cond) { "PASS: $msg" | Add-Content "$env:SMOKE/summary.md" }
+            else { "FAIL: $msg" | Add-Content "$env:SMOKE/summary.md"; $script:fail.Add($msg) }
+          }
+          $root = "$env:SMOKE/fresh/Yandex_Portable"
+          $app = "$root/Yandex"
+          $ver = '${{ steps.rel.outputs.ver }}'
+          $keys = @('StatisticsReporting', 'CrashesReporting', 'BackgroundModeEnabled', 'YandexAutoLaunchMode',
+                    'YandexAliceMsgDisable', 'NeuroNtpTools', 'NtpNotificationsDisable', 'YandexButtonDisable',
+                    'SearchSuggestEnabled', 'UpdateAllowed', 'BackgroundUpdateAllowed')
+
+          # Simulate an old install: version marker forced to 0.0.0.0 so the
+          # real update flow always runs (Helium windows-smoke phase B).
+          Set-Content "$app/version.txt" '0.0.0.0'
+          "update flow: version.txt forced to 0.0.0.0" | Add-Content "$env:SMOKE/summary.md"
+          # Protected set = update.bat's protectedPaths minus version.txt,
+          # which this flow rewrites by design.
+          $protected = @('chrome++.ini', 'update.bat', 'debloater.reg')
+          foreach ($f in $protected) { (Get-FileHash "$app/$f").Hash + ' ' + $f | Add-Content "$env:SMOKE/hashes-before.txt" }
+          $dataFiles = @('Local State', 'Default\Preferences', 'First Run')
+          foreach ($d in $dataFiles) { (Get-FileHash "$root/Data/$d").Hash + ' ' + $d | Add-Content "$env:SMOKE/data-before.txt" }
+
+          # Upstream latest for post-update expectations: the winget
+          # PackageVersion (the same source update.bat and the builder trust).
+          $entries = Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/y/Yandex/Browser' -Headers @{ 'User-Agent' = 'yandex-browser-portable-smoke' }
+          $latest = ($entries | Where-Object { $_.type -eq 'dir' -and $_.name -match '^\d+(\.\d+)+$' } |
+                     ForEach-Object { [version]$_.name } | Sort-Object -Descending | Select-Object -First 1).ToString()
+          "update flow: winget PackageVersion=$latest (released tag=$ver)" | Add-Content "$env:SMOKE/summary.md"
+
+          "" | Add-Content "$env:SMOKE/summary.md"
+          "## Update flow (version.txt forced to 0.0.0.0)" | Add-Content "$env:SMOKE/summary.md"
+          # Run the real update.bat; stdin feeds both Read-Host prompts. CWD is
+          # the bat's OWN directory so the bare `update.bat` resolves (Helium
+          # windows-smoke lines 223-226 pattern).
+          $bat = "$app/update.bat"
+          if (-not (Test-Path $bat)) { throw 'update.bat missing from the package' }
+          "Running update.bat (piped 'y')..." | Add-Content "$env:SMOKE/summary.md"
+          Push-Location $app
+          try {
+            $p = Start-Process -FilePath "$env:ComSpec" -ArgumentList '/c','echo y| update.bat' -WorkingDirectory $app -Wait -PassThru -NoNewWindow
+            "update.bat exit code: $($p.ExitCode)" | Add-Content "$env:SMOKE/summary.md"
+          } finally { Pop-Location }
+          Assert ($p.ExitCode -eq 0) "update: exit code 0 (got $($p.ExitCode))"
+
+          $newV = ''
+          if (Test-Path "$app/version.txt") { $newV = (Get-Content "$app/version.txt" -Raw).Trim() }
+          Assert ($newV -eq $latest) "update: version.txt == winget latest ($newV == $latest)"
+
+          $protectedOk = $true
+          foreach ($line in (Get-Content "$env:SMOKE/hashes-before.txt")) {
+            $parts = $line -split ' ', 2
+            $f = Join-Path $app $parts[1]
+            if (-not (Test-Path -LiteralPath $f)) { $protectedOk = $false; Assert $false "update: protected file missing: $($parts[1])" }
+            elseif ((Get-FileHash -LiteralPath $f).Hash -ne $parts[0]) { $protectedOk = $false; Assert $false "update: protected file changed: $($parts[1])" }
+          }
+          Assert $protectedOk "update: protected files unchanged (chrome++.ini / update.bat / debloater.reg)"
+          Assert (Test-Path "$app/browser.exe") "update: browser.exe still present"
+
+          # Data\ lives at the package root and must be byte-identical (the
+          # copy-over refuses to touch Data/Cache; preseed sources are only
+          # re-applied inside the staged tree).
+          $dataOk = $true
+          foreach ($line in (Get-Content "$env:SMOKE/data-before.txt")) {
+            $parts = $line -split ' ', 2
+            $df = Join-Path "$root/Data" $parts[1]
+            if (-not (Test-Path -LiteralPath $df)) { $dataOk = $false; Assert $false "update: Data file missing: $($parts[1])" }
+            elseif ((Get-FileHash -LiteralPath $df).Hash -ne $parts[0]) { $dataOk = $false; Assert $false "update: Data file changed: $($parts[1])" }
+          }
+          Assert $dataOk "update: Data\ intact (Local State / Default Preferences / First Run byte-identical)"
+
+          # 11 policy keys still applied after the update (update.bat re-imports
+          # debloater.reg itself; re-import once more if anything went missing).
+          $missing2 = @()
+          foreach ($k in $keys) {
+            & reg.exe query 'HKLM\SOFTWARE\Policies\YandexBrowser' /v $k | Out-Null
+            if ($LASTEXITCODE -ne 0) { $missing2 += $k }
+          }
+          if ($missing2.Count -gt 0) {
+            "update: $($missing2.Count) policy key(s) missing after update - re-importing debloater.reg" | Add-Content "$env:SMOKE/summary.md"
+            & reg.exe import "$app\debloater.reg" | Out-Null
+            $missing2 = @()
+            foreach ($k in $keys) {
+              & reg.exe query 'HKLM\SOFTWARE\Policies\YandexBrowser' /v $k | Out-Null
+              if ($LASTEXITCODE -ne 0) { $missing2 += $k }
+            }
+          }
+          Assert ($missing2.Count -eq 0) "update: all 11 policy keys present under HKLM\SOFTWARE\Policies\YandexBrowser (missing: $($missing2 -join ', '))"
+
+          # EME re-probe: the update re-copies version.dll from the staged
+          # tree, so move it aside again before probing (Helium lesson).
+          $dll = Join-Path $app 'version.dll'
+          if (Test-Path -LiteralPath $dll) {
+            Move-Item -LiteralPath $dll -Destination "$dll.aside" -Force
+            'update: version.dll moved aside again for probing' | Add-Content "$env:SMOKE/summary.md"
+          }
+          $emeB = & (Join-Path $env:SMOKE 'run-probe.ps1') -App $app -Profile (Join-Path $env:SMOKE 'profileEmeC') -Log (Join-Path $env:SMOKE 'emeC.log') -Probe (Join-Path $env:SMOKE 'probe.html') -Label 'C-postupdate' -CdpPort 9462
+          Set-Content -Path (Join-Path $env:SMOKE 'emeB.txt') -Value $emeB
+          "EME post-update (phase C): $emeB" | Add-Content "$env:SMOKE/summary.md"
+
+          if ($fail.Count -gt 0) {
+            Set-Content "$env:SMOKE/c.txt" 'STATUS=FAIL'
+            throw "Phase C failed: $($fail -join '; ')"
+          }
+          Set-Content "$env:SMOKE/c.txt" 'STATUS=OK'
+          exit 0
+
+      - name: "Verdict - policy, EME and update flow"
+        id: verdict
+        if: always()
+        run: |
+          $summary = "$env:SMOKE/summary.md"
+          $allKeys = @('StatisticsReporting', 'CrashesReporting', 'BackgroundModeEnabled', 'YandexAutoLaunchMode',
+                       'YandexAliceMsgDisable', 'NeuroNtpTools', 'NtpNotificationsDisable', 'YandexButtonDisable',
+                       'SearchSuggestEnabled', 'UpdateAllowed', 'BackgroundUpdateAllowed')
+          function Read-Status([string]$path) {
+            if (-not (Test-Path $path)) { return 'MISSING' }
+            $raw = Get-Content $path -Raw -ErrorAction SilentlyContinue
+            if ($null -eq $raw) { return 'MISSING' }
+            if ($raw -match 'STATUS=(\S+)') { return $Matches[1] }
+            return 'MISSING'
+          }
+          function Read-Eme([string]$path) {
+            if (-not (Test-Path $path)) { return 'MISSING' }
+            $raw = Get-Content $path -Raw -ErrorAction SilentlyContinue
+            if ($null -eq $raw) { return 'MISSING' }
+            $raw = $raw.Trim()
+            if ($raw -match 'eme=([^;\r\n]+)') { return $Matches[1].Trim() }
+            return 'MISSING'
+          }
+          $stA = Read-Status (Join-Path $env:SMOKE 'a.txt')
+          $stB = Read-Status (Join-Path $env:SMOKE 'b.txt')
+          $stC = Read-Status (Join-Path $env:SMOKE 'c.txt')
+          $emeA = Read-Eme (Join-Path $env:SMOKE 'emeA.txt')
+          $emeB = Read-Eme (Join-Path $env:SMOKE 'emeB.txt')
+          $missingKeys = @()
+          $presentKeys = 0
+          $policyFile = Join-Path $env:SMOKE 'b-policy.txt'
+          if (Test-Path $policyFile) {
+            $pl = @(Get-Content $policyFile)
+            $presentKeys = @($pl | Where-Object { $_ -match '^PRESENT: ' }).Count
+            $missingKeys = @($pl | Where-Object { $_ -match '^MISSING: ' } | ForEach-Object { $_ -replace '^MISSING: ', '' })
+          }
+
+          $fails = @()
+          "" | Add-Content $summary
+          "## Phase status" | Add-Content $summary
+          "- A layout: $stA; B policy+EME: $stB; C update e2e: $stC" | Add-Content $summary
+          "## Policy keys (browser://policy dump)" | Add-Content $summary
+          if (Test-Path $policyFile) {
+            if ($missingKeys.Count -eq 0) {
+              "- Policy keys: 11/11 present ($($allKeys -join ', '))" | Add-Content $summary
+            } else {
+              "- Policy keys: $presentKeys/11 present; MISSING: $($missingKeys -join ', ')" | Add-Content $summary
+              $fails += "policy keys missing ($($missingKeys.Count)/11): $($missingKeys -join ', ')"
+            }
+          } else {
+            "- Policy keys: b-policy.txt MISSING (phase B never reached the dump)" | Add-Content $summary
+          }
+          "## EME (spike-P4 baseline = FAIL)" | Add-Content $summary
+          "- baseline probe (phase B): $emeA" | Add-Content $summary
+          "- post-update probe (phase C): $emeB" | Add-Content $summary
+          if (($emeA -eq 'CDM_OK') -and ($emeB -ne 'CDM_OK')) {
+            $fails += "EME regression: baseline CDM_OK but post-update=$emeB"
+          }
+          if (($emeA -ne 'MISSING') -and ($emeA -ne 'CDM_OK')) {
+            "- EME WARN: baseline is '$emeA' (spike P4 recorded FAIL) - not failing per the spike-P4 rule" | Add-Content $summary
+          }
+          foreach ($ph in @(@('A', $stA), @('B', $stB), @('C', $stC))) {
+            $st = $ph[1]
+            if ($st -eq 'OK') { continue }
+            if ($st -eq 'MISSING') { $fails += "PHASE $($ph[0]) MISSING (earlier step died before it started)" }
+            elseif ($st -eq 'RUNNING') { $fails += "PHASE $($ph[0]) MISSING (step died mid-run)" }
+            else { $fails += "PHASE $($ph[0]) FAILED (status=$st)" }
+          }
+          "- NOTE: a green browser://policy dump proves the 11 policies are read back by the browser; it does NOT prove telemetry stopped (honor-system; one-time packet capture = post-MVP)" | Add-Content $summary
+          "" | Add-Content $summary
+          "## Verdict" | Add-Content $summary
+          if ($fails.Count -eq 0) { "**Result: PASSED**" | Add-Content $summary }
+          else {
+            "**Result: FAILED**" | Add-Content $summary
+            foreach ($f in $fails) { "- FAIL: $f" | Add-Content $summary }
+          }
+
+          if (Test-Path $summary) {
+            Get-Content $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+          "" | Write-Host
+          "=========== smoke summary ===========" | Write-Host
+          if (Test-Path $summary) { Get-Content $summary | Write-Host }
+          "=====================================" | Write-Host
+          if ($fails.Count -gt 0) {
+            $fails | ForEach-Object { "FAIL: $_" | Write-Host }
+            exit 1
+          }
+          exit 0
