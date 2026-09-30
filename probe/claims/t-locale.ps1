@@ -62,15 +62,9 @@ try {
     $bytes = $dom.Length
     Write-Host ("detail: T8: exit={0} domBytes={1} lang={2} bodyOk={3}" -f $code, $bytes, $lang, $bodyOk)
 
-    $problems = @()
-    if ($bytes -eq 0) { $problems += 'no DOM captured (page never rendered)' }
-    if ($null -eq $lang) { $problems += 'navigator.language unreadable (no LOCALE_ title in DOM)' }
-    elseif ($lang -notmatch '^en') { $problems += "unexpected navigator.language=$lang (expected en*)" }
-    if (-not $bodyOk) { $problems += 'body render marker RENDERED_TEXT_OK missing' }
-    if (-not $onlyEn) { $problems += ("Locales not trimmed to en-US.pak (files: {0})" -f ($locNames -join ',')) }
-
-    if ($problems.Count -gt 0) { Emit ('FAIL - ' + ($problems -join '; ')) }
-    Emit ('PASS - lang={0}; Locales=only en-US.pak; source={1}; domBytes={2}' -f $lang, $source, $bytes)
+    $langText = if ($null -eq $lang) { '' } else { $lang }
+    $verdict = Get-LocaleVerdict -DomOk $bodyOk -OnlyEn $onlyEn -Lang $langText -DomBytes $bytes
+    Emit ("{0} (source={1}; Locales=[{2}])" -f $verdict, $source, ($locNames -join ', '))
 }
 catch {
     Emit ('FAIL - ' + $_.Exception.Message)

@@ -44,7 +44,7 @@ try {
     $tmp = $pref + '.tmp'
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [IO.File]::WriteAllText($tmp, $new, $utf8NoBom)
-    [IO.File]::Replace($tmp, $pref, $null)
+    Invoke-AtomicReplace -SourcePath $tmp -DestinationPath $pref
     $tmpGone = -not (Test-Path -LiteralPath $tmp)
     $mid = Get-Content -LiteralPath $pref -Raw
     $midOk = ($mid -match ('"{0}"\s*:\s*"{1}"' -f $probeKey, $probeVal))
@@ -64,10 +64,9 @@ try {
     try { $null = $after | ConvertFrom-Json } catch { $jsonOk = $false }
     $readBack = ($after -match ('"{0}"\s*:\s*"{1}"' -f $probeKey, $probeVal))
     $dir = Split-Path -Parent $pref
-    $siblings = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -like 'Preferences*' } | ForEach-Object { $_.Name })
-    $tmpLeftovers = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match '\.(tmp|bak|journal)$' -or $_.Name -like '*-journal' } | ForEach-Object { $_.Name })
+    $allNames = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+    $siblings = @($allNames | Where-Object { $_ -like 'Preferences*' })
+    $tmpLeftovers = Get-PrefsLeftovers -Names $allNames
 
     $problems = @()
     if ($launchCode -ne 0) { $problems += "launch exit=$launchCode (dom bytes=$($dom.Length))" }
