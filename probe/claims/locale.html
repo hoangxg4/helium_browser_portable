@@ -1,0 +1,16 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>probe</title>
+<body>
+<p id="ok">locale probe standing by</p>
+<pre id="info"></pre>
+<script>
+var lang = (navigator && navigator.language) ? navigator.language : 'unknown';
+var ua = navigator.userAgent || '';
+document.getElementById('info').textContent =
+  'navigator.language=' + lang + '\nuserAgent=' + ua +
+  '\nRENDERED_TEXT_OK';
+document.getElementById('ok').textContent = 'locale probe rendered body text';
+document.title = 'LOCALE_' + lang;
+</script>
+</body>

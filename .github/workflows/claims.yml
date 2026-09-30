@@ -1,0 +1,223 @@
+# claims.yml - issue #1 claim probes (feature yandex-issue1-claims-test).
+#
+# One job, ordered so T1 (HKCU registry probe) runs LAST: a registry leak can
+# never contaminate T2-T8. T9 (launcher) is added by a later task; the `test`
+# input already accepts t9 but selects nothing until that stage exists.
+#
+# Verdict contract: every selected probe emits exactly one line
+#   T<n> verdict: PASS|FAIL|<custom> - <details>
+# into the log, verdicts.txt and the step summary - on every path, including
+# crash/timeout, so the verify greps can never come up empty. A probe FAIL is a
+# FINDING, not a broken workflow: the job only fails when a selected probe
+# emitted no verdict line or the shared source install failed.
+
+name: claims
+
+on:
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "Probe to run (all = T1-T8; t1..t8 = one probe; t9 = launcher stage, task 2)"
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - t1
+          - t2
+          - t3
+          - t4
+          - t5
+          - t6
+          - t7
+          - t8
+          - t9
+
+jobs:
+  claims:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TEST_INPUT: ${{ inputs.test }}
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+
+      - name: "Prep selection and verdict sinks"
+        id: prep
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $claims = Join-Path $env:RUNNER_TEMP 'claims'
+          New-Item -ItemType Directory -Force -Path $claims | Out-Null
+          "CLAIMS=$claims" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          [System.IO.File]::WriteAllText((Join-Path $claims 'verdicts.txt'), '')
+          "SRC_OK=0" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          . (Join-Path (Get-Location).Path 'probe\claims\claims-lib.ps1')
+          # No @() wrapper: the lib returns the array itself (unary comma), while
+          # @(function-call) would nest it one level and flatten every flag to false.
+          $ids = Get-VerdictIdsForSelection -Selection $env:TEST_INPUT
+          Write-Host ("detail: prep: selection={0} ids={1}" -f $env:TEST_INPUT, ($ids -join ','))
+          $needSrc = @($ids | Where-Object { $_ -in @('T1', 'T3', 'T5', 'T6', 'T7', 'T8') }).Count -gt 0
+          $runSrc = if ($needSrc) { 'true' } else { 'false' }
+          "RUN_SRC=$runSrc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "run_src=$runSrc" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          foreach ($id in @('T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8')) {
+            $flag = if ($ids -contains $id) { 'true' } else { 'false' }
+            "run_$($id.ToLower())=$flag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+          if ($env:GITHUB_STEP_SUMMARY) {
+            Add-Content -Encoding utf8 -Path $env:GITHUB_STEP_SUMMARY -Value '| probe | verdict |'
+            Add-Content -Encoding utf8 -Path $env:GITHUB_STEP_SUMMARY -Value '| --- | --- |'
+          }
+          exit 0
+
+      - name: "Install source tree"
+        id: src
+        if: steps.prep.outputs.run_src == 'true'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          try {
+            $root = (Get-Location).Path
+            $listUrl = 'https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/y/Yandex/Browser'
+            $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json' }
+            $entries = Invoke-RestMethod -Headers $h -Uri $listUrl -TimeoutSec 60
+            $dirs = @($entries | Where-Object { $_.type -eq 'dir' } | ForEach-Object { $_.name } |
+                Where-Object { $_ -match '^[0-9]+(\.[0-9]+)+$' })
+            if ($dirs.Count -eq 0) { throw 'no winget PackageVersion directory found' }
+            # Cast-safe newest-first pick: one uncastable name must not abort the install.
+            $best = $null
+            foreach ($n in $dirs) {
+              try { $v = [version]$n } catch { continue }
+              if ($null -eq $best -or $v -gt $best) { $best = $v; $ver = $n }
+            }
+            if ([string]::IsNullOrWhiteSpace($ver)) { throw 'no castable winget PackageVersion directory' }
+            Write-Host "detail: src: winget PackageVersion=$ver"
+            "YANDEX_VER=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+            $installer = Join-Path $env:CLAIMS ("installer\Yandex-{0}.exe" -f $ver)
+            pwsh -NoProfile -File (Join-Path $root 'probe\claims\fetch-installer.ps1') -RepoRoot $root -Version $ver -OutFile $installer
+            if ($LASTEXITCODE -ne 0) { throw "fetch-installer exited $LASTEXITCODE" }
+
+            $baseline = Join-Path $env:CLAIMS 'tree\baseline'
+            pwsh -NoProfile -File (Join-Path $root 'probe\claims\extract-tree.ps1') -RepoRoot $root -OutDir $baseline -Version $ver -Installer $installer
+            if ($LASTEXITCODE -ne 0) { throw "extract-tree exited $LASTEXITCODE" }
+
+            "BASELINE=$baseline" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "SRC_OK=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            Write-Host "detail: src: baseline ready at $baseline"
+          }
+          catch {
+            Write-Host "detail: src: FAILED - $($_.Exception.Message)"
+            Write-Host "detail: src: probes needing a tree will emit FAIL verdicts; the verify step fails the job"
+          }
+          exit 0
+
+      - name: "T2 ADMX audit"
+        id: t2
+        if: steps.prep.outputs.run_t2 == 'true'
+        run: |
+          pwsh -NoProfile -File probe/claims/t-admx.ps1
+          exit 0
+
+      - name: "T3 trim safety"
+        id: t3
+        if: steps.prep.outputs.run_t3 == 'true'
+        run: |
+          $baseline = $env:BASELINE
+          if ([string]::IsNullOrWhiteSpace($baseline)) { $baseline = 'MISSING' }
+          pwsh -NoProfile -File probe/claims/t-trim.ps1 -Baseline $baseline
+          exit 0
+
+      - name: "T4 corporate availability"
+        id: t4
+        if: steps.prep.outputs.run_t4 == 'true'
+        run: |
+          pwsh -NoProfile -File probe/claims/t-corp.ps1
+          exit 0
+
+      - name: "T5 preseed keys first run"
+        id: t5
+        if: steps.prep.outputs.run_t5 == 'true'
+        run: |
+          $baseline = $env:BASELINE
+          if ([string]::IsNullOrWhiteSpace($baseline)) { $baseline = 'MISSING' }
+          pwsh -NoProfile -File probe/claims/t-first-run.ps1 -Baseline $baseline
+          exit 0
+
+      - name: "T6 atomic write acceptance"
+        id: t6
+        if: steps.prep.outputs.run_t6 == 'true'
+        run: |
+          $baseline = $env:BASELINE
+          if ([string]::IsNullOrWhiteSpace($baseline)) { $baseline = 'MISSING' }
+          pwsh -NoProfile -File probe/claims/t-atomic.ps1 -Baseline $baseline
+          exit 0
+
+      - name: "T7 cache prune safety"
+        id: t7
+        if: steps.prep.outputs.run_t7 == 'true'
+        run: |
+          $baseline = $env:BASELINE
+          if ([string]::IsNullOrWhiteSpace($baseline)) { $baseline = 'MISSING' }
+          pwsh -NoProfile -File probe/claims/t-prune.ps1 -Baseline $baseline
+          exit 0
+
+      - name: "T8 locale trim render"
+        id: t8
+        if: steps.prep.outputs.run_t8 == 'true'
+        run: |
+          $baseline = $env:BASELINE
+          if ([string]::IsNullOrWhiteSpace($baseline)) { $baseline = 'MISSING' }
+          pwsh -NoProfile -File probe/claims/t-locale.ps1 -Baseline $baseline
+          exit 0
+
+      - name: "T1 HKCU policy honored"
+        id: t1
+        if: steps.prep.outputs.run_t1 == 'true'
+        run: |
+          $baseline = $env:BASELINE
+          if ([string]::IsNullOrWhiteSpace($baseline)) { $baseline = 'MISSING' }
+          pwsh -NoProfile -File probe/claims/t-hkcu.ps1 -Baseline $baseline
+          exit 0
+
+      - name: "Verify verdicts and summarize"
+        id: verify
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $problems = @()
+          $vfile = Join-Path $env:CLAIMS 'verdicts.txt'
+          $lines = @()
+          if (Test-Path -LiteralPath $vfile) {
+            $lines = @(Get-Content -LiteralPath $vfile | Where-Object { $_ -match 'T[1-8] verdict:' })
+          }
+          Write-Host ("detail: verify: verdict lines={0}" -f $lines.Count)
+          foreach ($l in $lines) { Write-Host $l }
+
+          . (Join-Path (Get-Location).Path 'probe\claims\claims-lib.ps1')
+          $wanted = Get-VerdictIdsForSelection -Selection $env:TEST_INPUT
+          $missing = @()
+          foreach ($id in $wanted) {
+            $found = @($lines | Where-Object { $_ -match ('^{0} verdict:' -f $id) }).Count
+            if ($found -le 0) { $missing += $id }
+          }
+          if ($missing.Count -gt 0) { $problems += ("missing verdict lines: {0}" -f ($missing -join ', ')) }
+          if ($lines.Count -eq 0) {
+            $problems += 'no T1-T8 verdict lines at all (selection produced no probes - the t9 stage does not exist yet)'
+          }
+          if ($env:RUN_SRC -eq 'true' -and $env:SRC_OK -ne '1') {
+            $problems += ("source install failed (SRC_OK={0})" -f $env:SRC_OK)
+          }
+
+          # Summary rows are written by emit-verdict.ps1 at probe time (header by
+          # prep) - appending them here again would duplicate every row.
+
+          if ($problems.Count -gt 0) {
+            foreach ($p in $problems) { Write-Host "detail: verify: PROBLEM - $p" }
+            exit 1
+          }
+          Write-Host ("detail: verify: all {0} selected probe(s) emitted verdict lines ({1} lines total)" -f $wanted.Count, $lines.Count)
+          exit 0

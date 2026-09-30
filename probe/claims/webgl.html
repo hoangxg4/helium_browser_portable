@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>probe</title>
+<body>
+<p id="ok">webgl probe standing by</p>
+<script>
+var canvas = document.createElement('canvas');
+var gl = null;
+var kind = '';
+try {
+  gl = canvas.getContext('webgl2');
+  if (gl) { kind = 'webgl2'; }
+  else {
+    gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    if (gl) { kind = 'webgl'; }
+  }
+} catch (e) {
+  document.title = 'WEBGL_FAIL';
+  document.getElementById('ok').textContent = 'WEBGL_FAIL - ' + e.name + ': ' + e.message;
+}
+if (gl) {
+  document.title = 'WEBGL_OK';
+  document.getElementById('ok').textContent = 'WEBGL_OK - context=' + kind +
+    ' vendor=' + gl.getParameter(gl.VENDOR) +
+    ' renderer=' + gl.getParameter(gl.RENDERER);
+} else if (document.title !== 'WEBGL_FAIL') {
+  document.title = 'WEBGL_FAIL';
+  document.getElementById('ok').textContent = 'WEBGL_FAIL - no webgl context';
+}
+</script>
+</body>
