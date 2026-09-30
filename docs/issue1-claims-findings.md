@@ -1,12 +1,14 @@
 # Issue #1 claims — empirical findings (feature `yandex-issue1-claims-test`)
 
-**Status: RUN COMPLETE (Task 1)** — every `T<n> verdict:` line below is copied
-verbatim from the successful `claims.yml` run log (run 36664258871, 2026-09-30).
+**Status: RUN COMPLETE (Task 1, T1–T8)** — every `T<n> verdict:` line for T1–T8
+below is copied verbatim from the successful `claims.yml` run log (run
+36664258871, 2026-09-30). T9 (Go launcher, Task 2) is wired into the same
+workflow and its section below is filled from its own run.
 The §1–§8 verdict column and the Corrections/Owner-decisions sections stay
 `PENDING` until Task 3 aggregates T1–T9 into issue verdicts.
 
 - Repo: `hcdbp24c3/yandex-browser-portable`, branch `main`
-- Workflow: `.github/workflows/claims.yml`, dispatch input `test=all` (T1–T8; T9 = launcher, Task 2)
+- Workflow: `.github/workflows/claims.yml`, dispatch input `test=all` (T1–T9)
 - Source run: https://github.com/hcdbp24c3/yandex-browser-portable/actions/runs/36664258871
   (`completed success`, 26 `T[1-8] verdict:` lines in the log, ≥8 required)
 - Probe-development runs: 36661822112 and 36663223628 (both `success`) — these
@@ -15,8 +17,10 @@ The §1–§8 verdict column and the Corrections/Owner-decisions sections stay
   (negotiated `lang=ru` on an en-US-only tree with a fully rendered page; the
   judge now assesses the render, not the language tag). The final run contains
   the corrected probes.
-- Method: one `windows-latest` job, ordered T2 → T3 → T4 → T5 → T6 → T7 → T8 → T1
-  (T1 writes HKCU and must run last so a leak cannot contaminate the others).
+- Method: one `windows-latest` job, ordered T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → T1
+  (T1 writes HKCU and must run last so a leak cannot contaminate the others;
+  T9 runs before T1 for the same reason). T9 additionally needs Go, installed
+  by a `setup-go` step that only runs when T9 is selected.
   A probe `FAIL` is a finding, not a workflow failure: the job only fails when a
   selected probe emitted no verdict line or the shared source install failed.
 
@@ -184,6 +188,52 @@ The probe judges the RENDER (body marker + readable `navigator.language` + the
 en-US-only precondition), not the language tag: run 1 showed `lang=ru` with a
 fully rendered page and no `accept_languages` preseed — the negotiated language
 comes from profile/OS, unaffected by pak trimming.
+
+## T9 — Native Go launcher MVP (issue §4/§7/§8)
+
+**Verdict: PENDING** — filled from the T9 CI run once it completes.
+
+Scope: MVP **mechanics only** — single-instance mutex, the ephemeral HKCU
+policy lifecycle, the portable launch plan, the T7 cache prune and EN/RU
+output. No GUI framework, and the launcher is deliberately NOT added to the
+release zip (packaging is Task 3's owner question).
+
+### Delivery mechanism (T1 → T9)
+
+`docs/issue1-claims-findings.md` is the named single source of truth. The
+launcher parses the `T1 verdict:` line out of this file (`launcher/mode.go`,
+line-anchored regex so the evidence table cannot match it):
+
+| T1 verdict | launcher mode | effect |
+|---|---|---|
+| `HONORED` | `hkcu` | the 11 `debloater.reg` values are written to `HKCU\Software\Policies\YandexBrowser` for the run and removed on exit |
+| anything else (`IGNORED`, `FAIL`, …) | `skip - <exact T1 line>` | nothing is written to HKCU at all |
+| file or `T1 verdict:` line missing | — | selftest fails: Task 1 incomplete |
+
+With the T1 verdict currently on record (`IGNORED`, run 36664258871), the T9
+run exercises the **skip** path: the exact T1 reason is logged and HKCU is
+proven untouched before/during/after. The apply path stays covered by Go unit
+tests over an in-memory `RegistryView` seam (apply → verify → cleanup,
+pre-existing value restored, foreign values untouched, rollback on mid-apply
+failure) — it is not exercised on the runner because T1 has not earned it.
+
+### What the T9 driver proves on the runner
+
+`probe/claims/t9-launcher.ps1`, against a real extracted package:
+
+1. `go vet ./...` + `go test ./...` + `go build` (T9 Go checks step).
+2. Mutex acquired as `Global\YandexPortable_SingleInstance`; a second
+   invocation while the first is held forwards its argv URL over the named
+   pipe and both exit 0. A mutex create error is fatal — there is no `Local\`
+   fallback, because a fallback would fake the claim under test.
+3. Launch plan matches what is on disk: `version.dll` preferred, explicit
+   `--user-data-dir`/`--disk-cache-dir` fallback asserted after the DLL is set
+   aside.
+4. Prune: a stale `state.json` (9 days) deletes the T7 volatile dirs under
+   `Data\` and re-stamps `state.json`; the immediate rerun takes the fast-skip
+   path.
+5. Bilingual `--settings` output (EN and RU) without touching the mutex or the
+   registry.
 
 ---
 

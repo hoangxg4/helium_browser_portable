@@ -363,20 +363,19 @@ function Get-CorporateVerdict {
 
 function Get-VerdictIdsForSelection {
     <# Map the workflow_dispatch `test` input to probe ids.
-       all/unknown -> T1..T8; t9 -> empty (task 2); tN -> that probe. #>
+       all/unknown -> T1..T9; t9 -> T9 (launcher stage, task 2); tN -> that probe. #>
     [CmdletBinding()]
     param([AllowNull()][AllowEmptyString()][string]$Selection = 'all')
 
-    $all = @('T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8')
+    $all = @('T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9')
     $sel = if ([string]::IsNullOrWhiteSpace($Selection)) { 'all' } else { $Selection.Trim() }
 
     # Unary comma keeps the array intact through the pipeline: single-element
     # selections must still report .Count -eq 1 instead of collapsing to a
     # scalar string.
-    if ($sel -ieq 't9') { return ,@() }
     if ($sel -ieq 'all') { return ,$all }
 
-    $single = [regex]::Match($sel, '^t([1-8])$', 'IgnoreCase')
+    $single = [regex]::Match($sel, '^t([1-9])$', 'IgnoreCase')
     if ($single.Success) { return ,@(('T' + $single.Groups[1].Value)) }
 
     return ,$all

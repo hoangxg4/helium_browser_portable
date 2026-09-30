@@ -1,8 +1,8 @@
 # claims.yml - issue #1 claim probes (feature yandex-issue1-claims-test).
 #
-# One job, ordered so T1 (HKCU registry probe) runs LAST: a registry leak can
-# never contaminate T2-T8. T9 (launcher) is added by a later task; the `test`
-# input already accepts t9 but selects nothing until that stage exists.
+# One job, ordered so T1 (HKCU registry probe) runs LAST among T1-T8: a
+# registry leak can never contaminate T2-T8. T9 (launcher) runs after T8 and
+# before T1 so its before/after HKCU snapshot sees a pristine policy surface.
 #
 # Verdict contract: every selected probe emits exactly one line
 #   T<n> verdict: PASS|FAIL|<custom> - <details>
@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       test:
-        description: "Probe to run (all = T1-T8; t1..t8 = one probe; t9 = launcher stage, task 2)"
+        description: "Probe to run (all = T1-T9; t1..t9 = one probe)"
         required: false
         default: all
         type: choice
@@ -61,11 +61,11 @@ jobs:
           # @(function-call) would nest it one level and flatten every flag to false.
           $ids = Get-VerdictIdsForSelection -Selection $env:TEST_INPUT
           Write-Host ("detail: prep: selection={0} ids={1}" -f $env:TEST_INPUT, ($ids -join ','))
-          $needSrc = @($ids | Where-Object { $_ -in @('T1', 'T3', 'T5', 'T6', 'T7', 'T8') }).Count -gt 0
+          $needSrc = @($ids | Where-Object { $_ -in @('T1', 'T3', 'T5', 'T6', 'T7', 'T8', 'T9') }).Count -gt 0
           $runSrc = if ($needSrc) { 'true' } else { 'false' }
           "RUN_SRC=$runSrc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "run_src=$runSrc" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          foreach ($id in @('T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8')) {
+          foreach ($id in @('T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9')) {
             $flag = if ($ids -contains $id) { 'true' } else { 'false' }
             "run_$($id.ToLower())=$flag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           }
@@ -114,6 +114,42 @@ jobs:
             Write-Host "detail: src: FAILED - $($_.Exception.Message)"
             Write-Host "detail: src: probes needing a tree will emit FAIL verdicts; the verify step fails the job"
           }
+          exit 0
+
+      - name: "Set up Go"
+        id: go
+        if: steps.prep.outputs.run_t9 == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: launcher/go.mod
+          cache-dependency-path: launcher/go.sum
+
+      - name: "T9 Go checks"
+        id: t9go
+        if: steps.prep.outputs.run_t9 == 'true'
+        run: |
+          # Non-failing on purpose: vet/test/build outcomes travel to the driver
+          # as T9_GO_OK, which turns them into one T9 verdict line instead of a
+          # dead step with no verdict (verdict contract above).
+          $ErrorActionPreference = 'Continue'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $ok = '1'
+          $bin = ''
+          Push-Location launcher
+          try {
+            go vet ./...
+            if ($LASTEXITCODE -ne 0) { $ok = '0'; Write-Host "detail: t9go: go vet failed (exit $LASTEXITCODE)" }
+            go test ./...
+            if ($LASTEXITCODE -ne 0) { $ok = '0'; Write-Host "detail: t9go: go test failed (exit $LASTEXITCODE)" }
+            $bin = Join-Path $env:CLAIMS 'bin\yandex-launcher.exe'
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $bin) | Out-Null
+            go build -o $bin .
+            if ($LASTEXITCODE -ne 0) { $ok = '0'; $bin = ''; Write-Host "detail: t9go: go build failed (exit $LASTEXITCODE)" }
+          }
+          finally { Pop-Location }
+          "T9_GO_OK=$ok" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          if ($ok -eq '1') { "T9_EXE=$bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+          Write-Host "detail: t9go: vet+test+build ok=$ok exe=$bin"
           exit 0
 
       - name: "T2 ADMX audit"
@@ -175,6 +211,17 @@ jobs:
           pwsh -NoProfile -File probe/claims/t-locale.ps1 -Baseline $baseline
           exit 0
 
+      - name: "T9 launcher MVP"
+        id: t9
+        if: steps.prep.outputs.run_t9 == 'true'
+        run: |
+          $baseline = $env:BASELINE
+          if ([string]::IsNullOrWhiteSpace($baseline)) { $baseline = 'MISSING' }
+          # T9_EXE/T9_GO_OK come from the T9 Go checks step (empty => the
+          # driver rebuilds the launcher itself and reports its own verdict).
+          pwsh -NoProfile -File probe/claims/t9-launcher.ps1 -Baseline $baseline
+          exit 0
+
       - name: "T1 HKCU policy honored"
         id: t1
         if: steps.prep.outputs.run_t1 == 'true'
@@ -192,7 +239,7 @@ jobs:
           $vfile = Join-Path $env:CLAIMS 'verdicts.txt'
           $lines = @()
           if (Test-Path -LiteralPath $vfile) {
-            $lines = @(Get-Content -LiteralPath $vfile | Where-Object { $_ -match 'T[1-8] verdict:' })
+            $lines = @(Get-Content -LiteralPath $vfile | Where-Object { $_ -match 'T[1-9] verdict:' })
           }
           Write-Host ("detail: verify: verdict lines={0}" -f $lines.Count)
           foreach ($l in $lines) { Write-Host $l }
@@ -206,7 +253,7 @@ jobs:
           }
           if ($missing.Count -gt 0) { $problems += ("missing verdict lines: {0}" -f ($missing -join ', ')) }
           if ($lines.Count -eq 0) {
-            $problems += 'no T1-T8 verdict lines at all (selection produced no probes - the t9 stage does not exist yet)'
+            $problems += 'no T1-T9 verdict lines at all (selection produced no probes)'
           }
           if ($env:RUN_SRC -eq 'true' -and $env:SRC_OK -ne '1') {
             $problems += ("source install failed (SRC_OK={0})" -f $env:SRC_OK)

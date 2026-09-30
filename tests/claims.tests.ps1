@@ -47,9 +47,9 @@ Assert ((Format-VerdictLine 'T3' 'BROKEN - group B: webgl') -notmatch "[`r`n]") 
 $planStyle = Format-VerdictLine 'T2' '5 of 9 claimed names fabricated; 461 policies; all class=Both'
 Assert ($planStyle -eq 'T2 verdict: 5 of 9 claimed names fabricated; 461 policies; all class=Both') `
     'custom (non PASS/FAIL) verdict keeps the plan wording'
-Assert ((Format-VerdictLine 'T7' 'PASS - relaunch ok') -match '^T[1-8] verdict: ') `
-    'verdict line matches the verify grep T[1-8] verdict:'
-foreach ($id in @('T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8')) {
+Assert ((Format-VerdictLine 'T7' 'PASS - relaunch ok') -match '^T[1-9] verdict: ') `
+    'verdict line matches the verify grep T[1-9] verdict:'
+foreach ($id in @('T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9')) {
     Assert ((Format-VerdictLine $id 'PASS - x') -match ('^' + $id + ' verdict: ')) `
         "id $id emits its own verdict anchor"
 }
@@ -221,15 +221,16 @@ Assert ($fr -notmatch "[`r`n]") 'first-run verdict stays on one line'
 # ------------------------------------------------------------ selection map --
 
 Write-Host 'Get-VerdictIdsForSelection'
-Assert ((Get-VerdictIdsForSelection 'all').Count -eq 8) 'all selects the eight T1-T8 probes'
-Assert ((Get-VerdictIdsForSelection 'all') -contains 'T1') 'T1 is part of the T1-T8 group'
+Assert ((Get-VerdictIdsForSelection 'all').Count -eq 9) 'all selects the nine T1-T9 probes'
+Assert ((Get-VerdictIdsForSelection 'all') -contains 'T1') 'T1 is part of the T1-T9 group'
 Assert ((Get-VerdictIdsForSelection 't3').Count -eq 1 -and (Get-VerdictIdsForSelection 't3')[0] -eq 'T3') `
     'single-probe selection returns just that probe'
 Assert ((Get-VerdictIdsForSelection 'T7')[0] -eq 'T7') 'selection ids are case-insensitive'
-Assert ((Get-VerdictIdsForSelection 't9').Count -eq 0) 't9 selects nothing until task 2 adds its job'
-Assert ((Get-VerdictIdsForSelection 'nonsense').Count -eq 8) 'an unknown selection degrades to all probes'
+Assert ((Get-VerdictIdsForSelection 't9').Count -eq 1 -and (Get-VerdictIdsForSelection 't9')[0] -eq 'T9') `
+    't9 selects the launcher stage once task 2 adds it'
+Assert ((Get-VerdictIdsForSelection 'nonsense').Count -eq 9) 'an unknown selection degrades to all probes'
 $ids = Get-VerdictIdsForSelection 'all'
-Assert (($ids -join ',') -eq 'T1,T2,T3,T4,T5,T6,T7,T8') 'selection order is T1..T8 (T1 emitted last by the job)'
+Assert (($ids -join ',') -eq 'T1,T2,T3,T4,T5,T6,T7,T8,T9') 'selection order is T1..T9 (the job runs T9 before T1, T1 emitted last)'
 
 Write-Host ''
 Write-Host 'fetch-installer version passthrough (dot-source param clobber regression)'
