@@ -259,7 +259,7 @@ jobs:
 
           if ($fail.Count -gt 0) { throw "Phase B failed: $($fail -join '; ')" }
 
-      - name: Phase C — Crashpad must stay inside the portable folder (issue #9)
+      - name: Phase C — Crashpad location matrix (issue #9)
         id: phaseC
         run: |
           $fail = [System.Collections.Generic.List[string]]::new()
@@ -270,46 +270,66 @@ jobs:
           $root = "$env:SMOKE/fresh/Helium_Portable"
           $app = "$root/Helium"
           "" | Add-Content "$env:SMOKE/summary.md"
-          "## Phase C — Crashpad location (issue #9)" | Add-Content "$env:SMOKE/summary.md"
+          "## Phase C — Crashpad location matrix (issue #9)" | Add-Content "$env:SMOKE/summary.md"
 
-          # Shipped config pin: the fix must be present in the packaged ini.
           $ini = Get-Content "$app/chrome++.ini" -Raw
-          Assert (($ini -split "`n" | Where-Object { $_ -match '^command_line=' }) -join '' -match '--breakpad-dump-location=') "ini: command_line sets --breakpad-dump-location (issue #9 fix shipped)"
-          Assert (($ini -split "`n" | Where-Object { $_ -match '^command_line=' }) -join '' -notmatch '--disable-component-update') "ini: command_line has no --disable-component-update (issue #10 fix shipped)"
+          $cmdLine = (($ini -split "`n" | Where-Object { $_ -match '^command_line=' }) -join '')
+          Assert ($cmdLine -match '--breakpad-dump-location=') "ini: command_line sets --breakpad-dump-location (issue #9 fix shipped)"
+          Assert ($cmdLine -notmatch '--disable-component-update') "ini: command_line has no --disable-component-update (issue #10 fix shipped)"
           if (-not (Test-Path "$app/version.dll")) { Move-Item "$app/version.dll.hidden" "$app/version.dll" -Force }
           Assert (Test-Path "$app/version.dll") "version.dll restored for the portable-launch test"
 
-          $portableCrashpad = "$root/Data/Crashpad"
           $imputRoot = Join-Path $env:LOCALAPPDATA 'imput'
-          Remove-Item $imputRoot -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item $portableCrashpad -Recurse -Force -ErrorAction SilentlyContinue
-          Assert (-not (Test-Path $imputRoot)) "pre-launch: %LOCALAPPDATA%\imput absent"
 
-          # Launch exactly like a user does: chrome.exe with its own directory as
-          # the working directory (that is what a shortcut does), so a relative
-          # --breakpad-dump-location resolves the same way it would for them.
-          $p = Start-Process -FilePath "$app/chrome.exe" -WorkingDirectory $app -PassThru -WindowStyle Hidden `
-               '--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check',"--user-data-dir=$root/Data"
-          $exited = $p.WaitForExit(60000)
-          if (-not $exited) { $p.Kill($true); $p.WaitForExit(5000) }
-          Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
-          Start-Sleep 3
-
-          $imputNow = (Test-Path $imputRoot)
-          Assert (-not $imputNow) "post-launch: %LOCALAPPDATA%\imput still absent (Crashpad did not leak out of the portable folder)"
-          if ($imputNow) {
-            (Get-ChildItem $imputRoot -Recurse -Force | Select-Object -First 25 | ForEach-Object { $_.FullName }) |
-              Add-Content "$env:SMOKE/summary.md"
+          function Run-Variant([string]$label, [string[]]$extra) {
+            Remove-Item $imputRoot -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item "$root/Data" -Recurse -Force -ErrorAction SilentlyContinue
+            $errF = "$env:SMOKE/cp-$label-err.txt"
+            $outF = "$env:SMOKE/cp-$label-out.txt"
+            $launchArgs = @('--no-first-run','--no-default-browser-check',"--user-data-dir=$root/Data",
+                            "--breakpad-dump-location=..\Data\Crashpad") + $extra
+            try {
+              $p = Start-Process -FilePath "$app/chrome.exe" -ArgumentList $launchArgs -WorkingDirectory $app -PassThru `
+                   -WindowStyle Hidden -RedirectStandardError $errF -RedirectStandardOutput $outF
+              $exited = $p.WaitForExit(45000)
+              $handlerSeen = $false
+              for ($i = 0; $i -lt 10 -and -not $handlerSeen; $i++) {
+                if (Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.CommandLine -like '*crashpad-handler*' }) { $handlerSeen = $true; break }
+                Start-Sleep -Milliseconds 700
+              }
+              if (-not $exited) { try { $p.Kill($true) } catch {} ; $p.WaitForExit(5000) }
+              Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
+              Start-Sleep 2
+            } catch {
+              "  launch error: $($_.Exception.Message)" | Add-Content "$env:SMOKE/summary.md"
+            }
+            $leak = Test-Path $imputRoot
+            $portable = Test-Path "$root/Data/Crashpad"
+            $dataItems = @()
+            if (Test-Path "$root/Data") { $dataItems = Get-ChildItem "$root/Data" -Force -ErrorAction SilentlyContinue | Select-Object -First 12 | ForEach-Object { $_.Name } }
+            $cpLines = @()
+            if (Test-Path $errF) { $cpLines = Get-Content $errF -ErrorAction SilentlyContinue | Where-Object { $_ -match 'crashpad|breakpad|crash' } | Select-Object -First 2 }
+            "[$label] leakAppData=$leak; portableCrashpad=$portable; handlerProcess=$handlerSeen; Data=[$($dataItems -join ', ')]" | Add-Content "$env:SMOKE/summary.md"
+            if ($leak) { (Get-ChildItem $imputRoot -Recurse -Force | Select-Object -First 10 | ForEach-Object { "  LEAK: $($_.FullName)" }) | Add-Content "$env:SMOKE/summary.md" }
+            if ($cpLines) { $cpLines | ForEach-Object { "  stderr: $($_.Trim())" } | Add-Content "$env:SMOKE/summary.md" }
+            return @{ leak = $leak; portable = $portable }
           }
-          $portableCrashpadExists = (Test-Path $portableCrashpad)
-          Assert $portableCrashpadExists "post-launch: Data\Crashpad created inside the portable folder (--breakpad-dump-location honoured)"
-          $dumpLs = @()
-          if (Test-Path "$root/Data") { $dumpLs = Get-ChildItem "$root/Data" -Force -ErrorAction SilentlyContinue | Select-Object -First 20 | ForEach-Object { $_.Name } }
-          "Data\ contents: $($dumpLs -join ', ')" | Add-Content "$env:SMOKE/summary.md"
-          "stderr CDM/crashpad lines:" | Add-Content "$env:SMOKE/summary.md"
-          $cpLog = Get-ChildItem $env:SMOKE -Filter 'dump-*-err.txt' -ErrorAction SilentlyContinue |
-            ForEach-Object { Get-Content $_.FullName -ErrorAction SilentlyContinue | Where-Object { $_ -match 'crashpad|crash-dumps|breakpad' } | Select-Object -First 3 }
-          if ($cpLog) { $cpLog | Add-Content "$env:SMOKE/summary.md" } else { "- none" | Add-Content "$env:SMOKE/summary.md" }
+
+          $r1 = Run-Variant 'baseline-headless' @('--headless=new','--disable-gpu','about:blank')
+          $r2 = Run-Variant 'enable-crash-reporter' @('--headless=new','--disable-gpu','--enable-crash-reporter','--enable-crash-reporter-for-testing','about:blank')
+          $r3 = Run-Variant 'headed-crashpad' @('--enable-crash-reporter','--enable-crash-reporter-for-testing','about:blank')
+          $r4 = Run-Variant 'simulate-crash' @('--headless=new','--disable-gpu','--enable-crash-reporter','--enable-crash-reporter-for-testing','chrome://crash')
+
+          # The leak is the actual bug; the portable Crashpad dir only proves the
+          # redirect was honoured (Crashpad may legitimately not initialise in CI).
+          Assert (-not ($r1.leak -or $r2.leak -or $r3.leak -or $r4.leak)) "no variant recreated %LOCALAPPDATA%\imput (issue #9: Crashpad stays portable)"
+          $anyPortable = ($r1.portable -or $r2.portable -or $r3.portable -or $r4.portable)
+          if (-not $anyPortable) {
+            "WARN: Crashpad never initialised in any variant — %LOCALAPPDATA% absence is therefore not yet proof that the redirect works; kept as a WARN, not a failure." | Add-Content "$env:SMOKE/summary.md"
+          }
+          $leaked = ($r1.leak -or $r2.leak -or $r3.leak -or $r4.leak)
+          "issue9-leak=$leaked`nissue9-portable=$anyPortable" | Set-Content "$env:SMOKE/issue9.txt"
 
           if ($fail.Count -gt 0) { throw "Phase C failed: $($fail -join '; ')" }
 
@@ -361,10 +381,14 @@ jobs:
           # Phase C/D artifacts (issue #9 Crashpad + L1/L3 matrix). These files
           # are written with Set-Content, so read them as plain text.
           $imputLeak = 'MISSING'
-          if (Test-Path "$env:SMOKE/summary.md") {
-            $cText = Get-Content "$env:SMOKE/summary.md" -Raw
-            if ($cText -match 'post-launch: %LOCALAPPDATA%\\imput still absent') { $imputLeak = 'ABSENT' }
-            if ($cText -match 'FAIL: post-launch: %LOCALAPPDATA%\\imput still absent') { $imputLeak = 'LEAKED' }
+          $cpInit = 'NOT_MEASURED'
+          if (Test-Path "$env:SMOKE/issue9.txt") {
+            $i9 = (Get-Content "$env:SMOKE/issue9.txt" -Raw).Trim()
+            # 'issue9-portable=False' means every variant ran and none leaked,
+            # but Crashpad never initialised either — treat as WARNonly then.
+            $leaked = ($i9 -match 'issue9-leak=True')
+            $imputLeak = if ($leaked) { 'LEAKED' } else { 'ABSENT' }
+            $cpInit = if ($i9 -match 'issue9-portable=True') { 'INITIALISED' } else { 'NOT_INITIALISED' }
           }
           $rob = 'MISSING'
           if (Test-Path "$env:SMOKE/eme-rob.txt") { $rob = (Get-Content "$env:SMOKE/eme-rob.txt" -Raw).Trim() }
@@ -419,13 +443,15 @@ jobs:
 
           "" | Add-Content $summary
           "## Issue #9 (Crashpad stays portable) + L1/L3 matrix" | Add-Content $summary
-          "- Crashpad leak check (%LOCALAPPDATA%\imput after a real portable launch): $imputLeak" | Add-Content $summary
+          "- Crashpad leak check over 4 launch variants (%LOCALAPPDATA%\imput): $imputLeak (Crashpad initialised: $cpInit)" | Add-Content $summary
           "- Widevine robustness matrix: $rob" | Add-Content $summary
           if ($imputLeak -eq 'LEAKED') {
             $fails += "issue #9 regression: Crashpad recreated %LOCALAPPDATA%\imput"
             "**#9 REGRESSION** — the shipped --breakpad-dump-location did not keep Crashpad inside the portable folder; see Phase C." | Add-Content $summary
+          } elseif ($imputLeak -eq 'ABSENT' -and $cpInit -eq 'INITIALISED') {
+            "**#9 VERIFIED** — Crashpad initialised and stayed inside the portable folder; no %LOCALAPPDATA%\imput is created by a portable launch." | Add-Content $summary
           } elseif ($imputLeak -eq 'ABSENT') {
-            "**#9 VERIFIED** — no %LOCALAPPDATA%\imput is created after a portable launch; Crashpad stays under Data\Crashpad." | Add-Content $summary
+            "**#9 NOT REPRODUCED / NOT PROVEN** — no %LOCALAPPDATA%\imput was created, but Crashpad did not initialise in any CI variant, so the redirect itself is unproven here; treat the AppData report as environment-specific and keep the flag + verify manually on Windows." | Add-Content $summary
           } else {
             "**#9 NOT MEASURED** — Phase C did not run to completion." | Add-Content $summary
           }

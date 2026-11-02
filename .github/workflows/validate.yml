@@ -180,7 +180,7 @@ jobs:
         # end-to-end evidence and a regression cannot be distinguished from a
         # flaky run.
         grep -qF 'PROBE_ROB_B64' "$SMOKE" || { echo "  ERROR: missing robustness-matrix probe env (L1/L3 evidence)"; exit 1; }
-        grep -qF 'Phase C — Crashpad must stay inside the portable folder' "$SMOKE" || { echo "  ERROR: missing Crashpad phase (issue #9 evidence)"; exit 1; }
+        grep -qF 'Phase C — Crashpad location matrix' "$SMOKE" || { echo "  ERROR: missing Crashpad phase (issue #9 evidence)"; exit 1; }
         grep -qF -e '--breakpad-dump-location' "$SMOKE" || { echo "  ERROR: Crashpad phase does not pin the fix flag"; exit 1; }
         grep -qF -e '--disable-component-update' "$SMOKE" || { echo "  ERROR: smoke run does not assert the issue #10 flag is absent"; exit 1; }
         echo "  smoke evidence pins: OK"
