@@ -4,6 +4,21 @@ on:
     - cron: '0 17 * * *'
   workflow_dispatch:
 
+# Source of truth for Helium\WidevineCdm (x64 only).
+#
+# Why this source: the CDM is Google's Widevine build redistributed inside
+# macchrome/winchrome's ungoogled-chromium package, and Helium is a
+# Chromium-based browser whose runtime loads exactly this module from the flat
+# exe-dir path. The Helium zip itself ships no CDM (verified: 75 entries, no
+# WidevineCdm), which is why this repo carries one.
+#
+# What is guarded below:
+#   * the version never regresses (a stale/renamed upstream asset cannot
+#     silently downgrade the shipped CDM);
+#   * the manifest and the DLL are both present and the DLL is non-trivial in
+#     size before anything is committed;
+#   * only the win_x64 payload is kept — no arm64 Widevine CDM exists for
+#     Windows, and the arm64 release deliberately ships without a CDM.
 jobs:
   update:
     runs-on: windows-latest
@@ -58,12 +73,35 @@ jobs:
         echo "Current: $CURRENT_VERSION"
         echo "New: $NEW_VERSION"
         
+        # Refuse to regress or to ship a broken payload.
+        if [ ! -f "$WIDEVINE_PATH/_platform_specific/win_x64/widevinecdm.dll" ]; then
+          echo "ERROR: upstream has no win_x64/widevinecdm.dll — refusing to update"
+          exit 1
+        fi
+        DLL_BYTES=$(stat -c%s "$WIDEVINE_PATH/_platform_specific/win_x64/widevinecdm.dll")
+        echo "DLL size: $DLL_BYTES bytes"
+        if [ "$DLL_BYTES" -lt 10000000 ]; then
+          echo "ERROR: extracted widevinecdm.dll is implausibly small ($DLL_BYTES bytes) — refusing to update"
+          exit 1
+        fi
+        if [ -n "$CURRENT_VERSION" ]; then
+          HIGHER=$(printf '%s\n%s\n' "$CURRENT_VERSION" "$NEW_VERSION" | sort -V | tail -1)
+          if [ "$HIGHER" != "$NEW_VERSION" ] && [ "$NEW_VERSION" != "$CURRENT_VERSION" ]; then
+            echo "ERROR: upstream version $NEW_VERSION is older than shipped $CURRENT_VERSION — refusing to downgrade"
+            exit 1
+          fi
+        fi
+
         # Update if different
         if [ "$NEW_VERSION" != "$CURRENT_VERSION" ]; then
           echo "Updating WidevineCdm..."
           cd ..
           rm -rf WidevineCdm
           cp -r "temp/$WIDEVINE_PATH" WidevineCdm
+          # Only the win_x64 payload is shipped; the manifest lists x86/arm64
+          # platform entries that no release ever contained, which made the
+          # package look wider than it is (and hid the arm64 gap until now).
+          find WidevineCdm -mindepth 2 -maxdepth 2 -type d -name 'win_*' ! -name 'win_x64' -print -exec rm -rf {} + || true
           
           git config user.name "GitHub Action"
           git config user.email "action@github.com"

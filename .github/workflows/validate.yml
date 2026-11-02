@@ -27,7 +27,23 @@ jobs:
 
         PLAT=$(jq -r '.platforms[0].sub_package_path' WidevineCdm/manifest.json)
         echo "  Platform path: $PLAT"
-        [ -d "WidevineCdm/$PLAT" ] || { echo "  WARNING: platform dir not found (may be normal if only x64)"; }
+        [ -d "WidevineCdm/$PLAT" ] || { echo "  ERROR: declared platform dir WidevineCdm/$PLAT does not exist"; exit 1; }
+        # Only win_x64 is ever shipped: the arm64 release carries no CDM at all
+        # because no arm64 Widevine CDM exists for Windows. Declaring x86/arm64
+        # platforms for directories that do not exist made the package look
+        # wider than it is and hid that gap.
+        PLAT_COUNT=$(jq '.platforms | length' WidevineCdm/manifest.json)
+        PLAT_ARCHS=$(jq -r '[.platforms[].arch] | join(",")' WidevineCdm/manifest.json)
+        [ "$PLAT_COUNT" -eq 1 ] && [ "$PLAT_ARCHS" = "x64" ] || {
+          echo "  ERROR: manifest must declare exactly one platform (x64), found $PLAT_COUNT: $PLAT_ARCHS"; exit 1; }
+        echo "  Platforms: OK (x64 only, matching what is shipped)"
+        for d in WidevineCdm/_platform_specific/*; do
+          [ -d "$d" ] || continue
+          case "$d" in
+            */win_x64) ;;
+            *) echo "  ERROR: unexpected platform payload $d (only win_x64 is supported)"; exit 1 ;;
+          esac
+        done
 
         echo ""
         echo "==> Checking WidevineCdm DLL"
@@ -157,6 +173,11 @@ jobs:
         # only registers the exe-dir flat location (windows-smoke run 36306584637).
         grep -qF 'Helium_Portable\Helium' .github/workflows/main.yml || { echo "  ERROR: main.yml does not assemble into Helium_Portable\Helium"; exit 1; }
         grep -qF 'Copy-Item WidevineCdm "Helium_Portable\Helium\"' .github/workflows/main.yml || { echo "  ERROR: WidevineCdm not copied to flat Helium\WidevineCdm"; exit 1; }
+        # x64-only CDM: the arm64 zip must not carry the x64 module, and the build
+        # must refuse to ship an arm64-wide CDM claim (issue: silent DRM gap).
+        grep -qF 'if ($arch -eq "x64")' .github/workflows/main.yml || { echo "  ERROR: CDM copy is not architecture-gated"; exit 1; }
+        grep -qF 'arm64 package must not contain the x64 Widevine CDM' .github/workflows/main.yml || { echo "  ERROR: missing arm64 CDM assertion in main.yml"; exit 1; }
+        echo "  CDM architecture gating: OK (x64 only)"
         # Regression guard: versioned nesting must NOT come back (Chrome ignores it).
         grep -qF '$heliumVer\WidevineCdm' .github/workflows/main.yml && { echo "  ERROR: WidevineCdm nested under version dir — Chrome ignores that path"; exit 1; }
         echo "  hibbiki layout assembly: OK"
@@ -171,6 +192,45 @@ jobs:
         [ "$SOFTPROPS_COUNT" -eq 1 ] || { echo "  ERROR: expected exactly 1 action-gh-release publish point, found $SOFTPROPS_COUNT"; exit 1; }
         echo "  Unified release scheme: OK"
 
+    - name: Validate root launchers
+      run: |
+        echo "==> Checking package-root launchers"
+        # These files sit next to Helium (not inside it) so the browser can be
+        # started or updated without navigating into the browser folder. They must
+        # stay portable: relative to their own location, never an absolute path,
+        # and the browser launcher must set Helium as the working directory.
+        LAUNCHERS=(
+          "Helium Browser.bat"
+          "Update Helium.bat"
+          "Set Default Browser.bat"
+          "Apply Debloat Policies.bat"
+          "Defender Exclusion.bat"
+          "README-FIRST.txt"
+        )
+        ALL_OK=true
+        for f in "${LAUNCHERS[@]}"; do
+          if [ -f "$f" ]; then echo "  OK: $f"; else echo "  MISSING: $f"; ALL_OK=false; fi
+        done
+        [ "$ALL_OK" = true ] || { echo "  ERROR: root launchers missing"; exit 1; }
+
+        grep -qF 'Helium\chrome.exe' 'Helium Browser.bat' || { echo "  ERROR: browser launcher does not target the Helium chrome.exe"; exit 1; }
+        grep -qF 'cd /d "%APP_DIR%Helium"' 'Helium Browser.bat' || { echo "  ERROR: browser launcher must cd into Helium (profile/cache/Crashpad paths are relative to the working directory)"; exit 1; }
+        grep -qF 'pushd "%APP_DIR%Helium"' 'Update Helium.bat' || { echo "  ERROR: updater launcher must run from Helium (update.bat resolves paths from its own folder)"; exit 1; }
+        grep -qF 'reg import' 'Apply Debloat Policies.bat' || { echo "  ERROR: policy launcher does not import debloater.reg"; exit 1; }
+        grep -qF 'call bypass_windows_defender.bat "%APP_DIR%"' 'Defender Exclusion.bat' || { echo "  ERROR: Defender launcher must exclude the package root, not Helium"; exit 1; }
+        for f in 'Helium Browser.bat' 'Update Helium.bat' 'Set Default Browser.bat' 'Apply Debloat Policies.bat' 'Defender Exclusion.bat'; do
+          # Strip CR first (CRLF files) and match a real drive path only
+          # (letter + colon + slash). A loose [A-Z]: pattern also matches
+          # innocent text such as 'echo ERROR: ...'.
+          if tr -d '\r' < "$f" | grep -qE '[A-Za-z]:[\\/]'; then
+            echo "  ERROR: $f contains an absolute drive path (not portable)"; exit 1
+          fi
+        done
+        for f in "${LAUNCHERS[@]}"; do
+          grep -qF "$f" .github/workflows/main.yml || { echo "  ERROR: main.yml does not ship $f"; exit 1; }
+        done
+        echo "  Root launchers: OK (portable, correct targets, shipped)"
+
     - name: Validate smoke workflow (issue #9 / #10 evidence pins)
       run: |
         echo "==> Checking windows-smoke.yml"
@@ -181,6 +241,7 @@ jobs:
         # flaky run.
         grep -qF 'PROBE_ROB_B64' "$SMOKE" || { echo "  ERROR: missing robustness-matrix probe env (L1/L3 evidence)"; exit 1; }
         grep -qF 'Phase C — Crashpad location matrix' "$SMOKE" || { echo "  ERROR: missing Crashpad phase (issue #9 evidence)"; exit 1; }
+        grep -qF 'Phase E — arm64 archive layout' "$SMOKE" || { echo "  ERROR: missing arm64 archive phase (no-CDM pin)"; exit 1; }
         grep -qF -e '--breakpad-dump-location' "$SMOKE" || { echo "  ERROR: Crashpad phase does not pin the fix flag"; exit 1; }
         grep -qF -e '--disable-component-update' "$SMOKE" || { echo "  ERROR: smoke run does not assert the issue #10 flag is absent"; exit 1; }
         echo "  smoke evidence pins: OK"
@@ -191,6 +252,9 @@ jobs:
         REQUIRED=(
           "chrome++.ini"
           "bypass_windows_defender.bat"
+          "Helium Browser.bat"
+          "Update Helium.bat"
+          "README-FIRST.txt"
           "debloater.reg"
           "default-apps-multi-profile.bat"
           "update.bat"

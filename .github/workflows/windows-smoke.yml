@@ -151,6 +151,15 @@ jobs:
           Assert (Test-Path "$app/version.dll") "fresh: version.dll present (issue #7)"
           Assert ((Get-Content "$app/version.txt" -Raw).Trim() -eq $ver) "fresh: version.txt == $ver"
           Assert (Test-Path "$app/WidevineCdm/manifest.json") "fresh: flat WidevineCdm present (layout)"
+          # Package-root launchers (x64 build must ship them; the browser itself
+          # stays in Helium\ because Chrome++ requires that).
+          $rootDir = "$env:SMOKE/fresh/Helium_Portable"
+          foreach ($rf in 'Helium Browser.bat','Update Helium.bat','Set Default Browser.bat','Apply Debloat Policies.bat','Defender Exclusion.bat','README-FIRST.txt') {
+            Assert (Test-Path (Join-Path $rootDir $rf)) "fresh: root launcher present: $rf"
+          }
+          $browserBat = Get-Content (Join-Path $rootDir 'Helium Browser.bat') -Raw
+          Assert ($browserBat -match 'Helium\\chrome.exe') "fresh: browser launcher targets Helium\chrome.exe"
+          Assert ($browserBat -match 'cd /d "%~dp0Helium"') "fresh: browser launcher sets Helium\ as working directory"
           Assert (-not (Test-Path "$app/$ver/WidevineCdm")) "fresh: no versioned WidevineCdm (layout — Chrome ignores it)"
           "chrome.exe ProductVersion: $((Get-Item "$app/chrome.exe").VersionInfo.ProductVersion); size=$((Get-Item "$app/chrome.exe").Length)" | Add-Content "$env:SMOKE/summary.md"
           # Chrome++ version.dll (issue #7 artifact) hijacks app-local version.dll and
@@ -386,7 +395,47 @@ jobs:
           (Get-Content $err -ErrorAction SilentlyContinue | Where-Object { $_ -match 'widevine|cdm' } | Select-Object -First 5) |
             Add-Content "$env:SMOKE/summary.md"
 
-      - name: "Verdict — issue #5 resolved or confirmed"
+      - name: Phase E — arm64 archive layout (no CDM, launchers present)
+        id: phaseE
+        run: |
+          $fail = [System.Collections.Generic.List[string]]::new()
+          function Assert([bool]$cond, [string]$msg) {
+            if ($cond) { "PASS: $msg" | Add-Content "$env:SMOKE/summary.md" }
+            else { "FAIL: $msg" | Add-Content "$env:SMOKE/summary.md"; $script:fail.Add($msg) }
+          }
+          "" | Add-Content "$env:SMOKE/summary.md"
+          "## Phase E — arm64 archive layout" | Add-Content "$env:SMOKE/summary.md"
+
+          # No arm64 Widevine CDM exists for Windows, so the arm64 build ships
+          # without one instead of carrying an unloadable x64 module. This phase
+          # pins that, plus the root launchers, from the published zip.
+          $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = "application/vnd.github+json" }
+          $r = Invoke-RestMethod -Headers $h "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/latest"
+          $arm = $r.assets | Where-Object { $_.name -match '^helium-portable-arm64_.*\.zip$' } | Select-Object -First 1
+          if (-not $arm) {
+            "SKIP: no arm64 asset on $($r.tag_name) — nothing to verify" | Add-Content "$env:SMOKE/summary.md"
+            "phaseE=skipped" | Set-Content "$env:SMOKE/phaseE.txt"
+            return
+          }
+          $zip = "$env:SMOKE/arm64.zip"
+          Invoke-WebRequest -Uri $arm.browser_download_url -OutFile $zip
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $za = [IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $names = $za.Entries | ForEach-Object { $_.FullName }
+            Assert (($names | Where-Object { $_ -eq 'Helium_Portable/Helium/chrome.exe' }).Count -eq 1) "arm64: chrome.exe present"
+            Assert (($names | Where-Object { $_ -match 'WidevineCdm' }).Count -eq 0) "arm64: no WidevineCdm shipped (no arm64 CDM exists; avoids a silent DRM gap)"
+            foreach ($rf in 'Helium Browser.bat','Update Helium.bat','Set Default Browser.bat','Apply Debloat Policies.bat','Defender Exclusion.bat','README-FIRST.txt') {
+              Assert (($names | Where-Object { $_ -eq "Helium_Portable/$rf" }).Count -eq 1) "arm64: root launcher present: $rf"
+            }
+            Assert (($names | Where-Object { $_ -like 'Helium_Portable/Helium/*.exe' }).Count -ge 1) "arm64: browser binaries present"
+            $top = ($names | Where-Object { $_ -match '^Helium_Portable/[^/]+$' }) -join ', '
+            "arm64 root entries: $top" | Add-Content "$env:SMOKE/summary.md"
+          } finally { $za.Dispose() }
+          "phaseE=$(if ($fail.Count -gt 0) { 'failed' } else { 'ok' })" | Set-Content "$env:SMOKE/phaseE.txt"
+          if ($fail.Count -gt 0) { throw "Phase E failed: $($fail -join '; ')" }
+
+      - name: "Verdict — issues #5/#9/#10 status"
         if: always()
         run: |
           $summary = "$env:SMOKE/summary.md"
@@ -471,6 +520,13 @@ jobs:
           "- Crashpad leak check over 4 launch variants (%LOCALAPPDATA%\imput): $imputLeak (Crashpad initialised: $cpInit)" | Add-Content $summary
           "- Widevine robustness matrix (best-effort, headless-unreliable): $rob" | Add-Content $summary
           "- Phase D CDM registration log: $robCdm" | Add-Content $summary
+          $armNote = 'MISSING'
+          if (Test-Path "$env:SMOKE/phaseE.txt") {
+            $armNote = (Get-Content "$env:SMOKE/phaseE.txt" -Raw).Trim()
+            if ($armNote -match 'skipped') { $armNote = 'SKIPPED (no arm64 asset in the latest release)' }
+            elseif ($armNote -match 'ok') { $armNote = 'arm64 archive carries no CDM and ships the root launchers' }
+          }
+          "- arm64 archive check: $armNote" | Add-Content $summary
           if ($imputLeak -eq 'LEAKED') {
             $fails += "issue #9 regression: Crashpad recreated %LOCALAPPDATA%\imput"
             "**#9 REGRESSION** — the shipped --breakpad-dump-location did not keep Crashpad inside the portable folder; see Phase C." | Add-Content $summary

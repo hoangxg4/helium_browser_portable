@@ -23,16 +23,6 @@
       "os": "win",
       "arch": "x64",
       "sub_package_path": "_platform_specific/win_x64/"
-    },
-    {
-      "os": "win",
-      "arch": "x86",
-      "sub_package_path": "_platform_specific/win_x86/"
-    },
-    {
-      "os": "win",
-      "arch": "arm64",
-      "sub_package_path": "_platform_specific/win_arm64/"
     }
   ]
 }

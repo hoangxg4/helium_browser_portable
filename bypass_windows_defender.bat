@@ -19,10 +19,15 @@ if '%errorlevel%' NEQ '0' (
     if exist "%temp%\getadmin.vbs" ( del "%temp%\getadmin.vbs" )
     pushd "%~dp0"
 
-    :: Deviation from hibbiki: exclude the portable ROOT (this script lives in
-    :: Helium\, but Data\ and Cache\ sit one level up — excluding only %~dp0
-    :: would leave user data scanned).
-    for %%I in ("%~dp0..") do set "currentDir=%%~fI"
+    :: Deviation from hibbiki: exclude the portable ROOT by default (this script
+    :: lives in Helium\, but Data\ and Cache\ sit one level up — excluding only
+    :: %~dp0 would leave user data scanned). %%1 lets a launcher in the package
+    :: root pass its own folder explicitly.
+    if not "%~1"=="" (
+        for %%I in ("%~1") do set "currentDir=%%~fI"
+    ) else (
+        for %%I in ("%~dp0..") do set "currentDir=%%~fI"
+    )
 
     :: Define ANSI Escape Codes
     for /F "tokens=1,2 delims=#" %%a in ('"prompt #$H#$E# & echo on & for %%b in (1) do rem"') do set "ESC=%%b"

@@ -155,12 +155,22 @@ jobs:
         # Copy config files
         Copy-Item chrome++.ini,debloater.reg,default-apps-multi-profile.bat,update.bat,bypass_windows_defender.bat Helium_Portable\Helium\ -Force
 
-        # Copy WidevineCdm — FLAT at Helium\WidevineCdm (next to chrome.exe).
-        # Chrome 154/Helium only registers the preinstalled CDM from the exe-dir
-        # flat path; the old versioned Helium\<ver>\WidevineCdm nesting is
-        # ignored entirely (verified empirically by windows-smoke run
-        # 36306584637: flat=CDM_OK, versioned=CDM_FAIL, chrome-ver=CDM_FAIL).
-        Copy-Item WidevineCdm "Helium_Portable\Helium\" -Recurse -Force
+        # Convenience launchers + quick-start note at the PACKAGE ROOT, so the
+        # user does not have to go into Helium\ to start or update the browser.
+        Copy-Item 'Helium Browser.bat','Update Helium.bat','Set Default Browser.bat','Apply Debloat Policies.bat','Defender Exclusion.bat','README-FIRST.txt' Helium_Portable\ -Force
+
+        # Copy WidevineCdm — FLAT at Helium\WidevineCdm (next to chrome.exe) on
+        # x64 and ONLY on x64. Chrome 154/Helium registers the preinstalled CDM
+        # only from the exe-dir flat path (windows-smoke run 36306584637:
+        # flat=CDM_OK, versioned=CDM_FAIL, chrome-ver=CDM_FAIL). There is no
+        # arm64 Widevine CDM for Windows (Google ships none for that target), so
+        # shipping the x64 DLL inside the arm64 zip created a package that looked
+        # DRM-enabled but could never load a matching module.
+        if ($arch -eq "x64") {
+          Copy-Item WidevineCdm "Helium_Portable\Helium\" -Recurse -Force
+        } else {
+          Write-Host "arm64: WidevineCdm intentionally not shipped (no arm64 CDM exists for Windows)"
+        }
 
         # Write version file
         Set-Content -Path "Helium_Portable\Helium\version.txt" -Value "$heliumVer"
@@ -192,9 +202,25 @@ jobs:
           Write-Error "Helium_Portable\Helium\chrome.exe missing before packaging — aborting"
           exit 1
         }
-        if (-not (Test-Path "Helium_Portable\Helium\WidevineCdm\manifest.json")) {
-          Write-Error "WidevineCdm missing at flat Helium\WidevineCdm — aborting (Chrome would not register a versioned path)"
-          exit 1
+        if ($arch -eq "x64") {
+          if (-not (Test-Path "Helium_Portable\Helium\WidevineCdm\manifest.json")) {
+            Write-Error "WidevineCdm missing at flat Helium\WidevineCdm — aborting (Chrome would not register a versioned path)"
+            exit 1
+          }
+        } else {
+          if (Test-Path "Helium_Portable\Helium\WidevineCdm") {
+            Write-Error "arm64 package must not contain the x64 Widevine CDM — aborting"
+            exit 1
+          }
+        }
+
+        # Root launchers must be present, otherwise "start the browser" breaks
+        # for everyone while the build still succeeds.
+        foreach ($f in 'Helium Browser.bat','Update Helium.bat','Set Default Browser.bat','Apply Debloat Policies.bat','Defender Exclusion.bat','README-FIRST.txt') {
+          if (-not (Test-Path "Helium_Portable\$f")) {
+            Write-Error "root launcher missing before packaging: $f — aborting"
+            exit 1
+          }
         }
 
         # Package
