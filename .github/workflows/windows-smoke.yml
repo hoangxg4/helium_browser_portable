@@ -344,9 +344,14 @@ jobs:
           Move-Item "$app/WidevineCdm" "$app/WidevineCdm-flat" -Force -ErrorAction SilentlyContinue
           $uri = 'file:///' + ("$env:SMOKE/probe-rob.html" -replace '\\', '/')
           $out = "$env:SMOKE/dump-rob-out.txt"; $err = "$env:SMOKE/dump-rob-err.txt"
+          # NOTE: no --virtual-time-budget here. Virtual time does not advance the
+          # CDM's own async initialisation, so an asynchronous robustness probe
+          # times out on every level instead of reporting it (observed: 5x TIMEOUT
+          # with only HW_SECURE_ALL answered). Use real time and read the completed
+          # DOM after the dump.
           $argList = @('--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check',
                        '--disable-crash-reporter',"--user-data-dir=$env:SMOKE/profileD",
-                       '--virtual-time-budget=60000','--dump-dom',$uri)
+                       '--timeout=40000','--dump-dom',$uri)
           try {
             $p = Start-Process -FilePath "$app/chrome.exe" -ArgumentList $argList -PassThru -NoNewWindow `
               -RedirectStandardOutput $out -RedirectStandardError $err
@@ -360,7 +365,16 @@ jobs:
             $pre = $Matches[1].Trim()
             if ($pre -ne 'pending' -and $pre -ne '') { $rob = $pre }
           }
-          $rob | Set-Content "$env:SMOKE/eme-rob.txt"
+          # Record both halves: which levels answered OK and which rejected, and
+          # whether the CDM was registered as a preinstalled component at all.
+          $cdmLine = ''
+          foreach ($f in (Get-ChildItem $env:SMOKE -Filter 'dump-rob-err.txt' -ErrorAction SilentlyContinue)) {
+            $hit = Get-Content $f.FullName -ErrorAction SilentlyContinue |
+                   Where-Object { $_ -match 'Preinstalled component found|Registering Widevine|Component ready' } |
+                   Select-Object -First 2
+            if ($hit) { $cdmLine = ($hit -join ' || ') }
+          }
+          "$rob`ncdm=$cdmLine" | Set-Content "$env:SMOKE/eme-rob.txt"
           "Robustness matrix: $rob" | Add-Content "$env:SMOKE/summary.md"
           "Meaning — NONE=no security requirement; SW_*=software (L3) paths; HW_*=hardware (L1) paths. A software-CDM build answers SW_* and rejects HW_*; an L3-only device cannot be upgraded to L1 from a portable zip (L1 needs OEM-provisioned hardware TEE, not a shipped file)." | Add-Content "$env:SMOKE/summary.md"
           (Get-Content $err -ErrorAction SilentlyContinue | Where-Object { $_ -match 'widevine|cdm' } | Select-Object -First 5) |
@@ -391,7 +405,12 @@ jobs:
             $cpInit = if ($i9 -match 'issue9-portable=True') { 'INITIALISED' } else { 'NOT_INITIALISED' }
           }
           $rob = 'MISSING'
-          if (Test-Path "$env:SMOKE/eme-rob.txt") { $rob = (Get-Content "$env:SMOKE/eme-rob.txt" -Raw).Trim() }
+          $robCdm = 'MISSING'
+          if (Test-Path "$env:SMOKE/eme-rob.txt") {
+            $robRaw = (Get-Content "$env:SMOKE/eme-rob.txt" -Raw).Trim()
+            $rob = ($robRaw -split "`n")[0].Trim()
+            if ($robRaw -match '(?m)^cdm=(.+)$') { $robCdm = $Matches[1].Trim() }
+          }
           $A0 = Read-Result "$env:SMOKE/emeA.txt"
           $P1 = Read-Result "$env:SMOKE/emeP1.txt"
           $P2 = Read-Result "$env:SMOKE/emeP2.txt"
@@ -445,6 +464,7 @@ jobs:
           "## Issue #9 (Crashpad stays portable) + L1/L3 matrix" | Add-Content $summary
           "- Crashpad leak check over 4 launch variants (%LOCALAPPDATA%\imput): $imputLeak (Crashpad initialised: $cpInit)" | Add-Content $summary
           "- Widevine robustness matrix: $rob" | Add-Content $summary
+          "- Phase D CDM registration log: $robCdm" | Add-Content $summary
           if ($imputLeak -eq 'LEAKED') {
             $fails += "issue #9 regression: Crashpad recreated %LOCALAPPDATA%\imput"
             "**#9 REGRESSION** — the shipped --breakpad-dump-location did not keep Crashpad inside the portable folder; see Phase C." | Add-Content $summary
