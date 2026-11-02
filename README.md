@@ -25,6 +25,7 @@ Helium_Portable/
 ├── Set Default Browser.bat     register Helium in Windows Settings
 ├── Apply Debloat Policies.bat  import debloater.reg (privacy + update policies)
 ├── Defender Exclusion.bat      add/remove a Defender exclusion for this folder
+├── Fix AppData leftovers.bat   delete an old %LOCALAPPDATA%\imput leftover folder
 ├── README-FIRST.txt            short quick-start note (plain text)
 ├── Helium/                     browser + fixed files (must stay here)
 │   ├── chrome.exe
@@ -58,6 +59,12 @@ anywhere (a `.lnk` stores an absolute path and breaks). They call into `Helium\`
 - `chrome++.ini` must **not** carry `--disable-component-update`: it also disables registration of *preinstalled*
   components, so the shipped CDM would never be found. Component updates stay disabled through the
   `ComponentUpdatesEnabled=0` policy in `debloater.reg` instead.
+- `--breakpad-dump-location=..\Data\Crashpad` is only a fallback: a relative value resolves against the
+  **working directory**, so a hand-made shortcut with an empty "Start in" defeats it — that is exactly how
+  the AppData leak in issue #9 survived a first fix. The shipped launcher therefore passes an **absolute**
+  `--breakpad-dump-location`, sets `BREAKPAD_DUMP_LOCATION`, and adds `--disable-crash-reporter` so Crashpad
+  never initialises its database in `%LOCALAPPDATA%\imput\Helium\User Data\Crashpad`. `Fix AppData
+  leftovers.bat` removes a folder left behind by an older launcher.
 - **x64 only.** The CDM is Google's build redistributed by
   [`macchrome/winchrome`](https://github.com/macchrome/winchrome) (x64 only, `update-widevine.yml` keeps it
   current and refuses to downgrade or to commit a broken payload). No arm64 Widevine CDM exists for Windows, so

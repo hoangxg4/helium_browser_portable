@@ -107,7 +107,11 @@ jobs:
         # <default user data dir>\Crashpad on Windows and ignores --user-data-dir,
         # so chrome++.ini must redirect it into the portable folder.
         grep '^command_line=' chrome++.ini | grep -q -- '--breakpad-dump-location=' || { echo "  ERROR: command_line must set --breakpad-dump-location (Crashpad leaks to AppData)"; exit 1; }
-        echo "  issue #9 guard: OK (Crashpad redirected into the portable folder)"
+        # The relative dump location alone is not enough: it resolves against the
+        # working directory, so a hand-made shortcut can defeat it (issue #9 came
+        # back that way). Crashpad must also be stopped from initialising.
+        grep '^command_line=' chrome++.ini | grep -q -- '--disable-crash-reporter' || { echo "  ERROR: command_line must set --disable-crash-reporter (relative dump path can be defeated by the working directory)"; exit 1; }
+        echo "  issue #9 guard: OK (Crashpad redirected AND not initialised)"
 
         echo "  command_line: $(grep 'command_line=' chrome++.ini | sed 's/command_line=//')"
 
@@ -205,6 +209,7 @@ jobs:
           "Set Default Browser.bat"
           "Apply Debloat Policies.bat"
           "Defender Exclusion.bat"
+          "Fix AppData leftovers.bat"
           "README-FIRST.txt"
         )
         ALL_OK=true
@@ -215,10 +220,15 @@ jobs:
 
         grep -qF 'Helium\chrome.exe' 'Helium Browser.bat' || { echo "  ERROR: browser launcher does not target the Helium chrome.exe"; exit 1; }
         grep -qF 'cd /d "%APP_DIR%Helium"' 'Helium Browser.bat' || { echo "  ERROR: browser launcher must cd into Helium (profile/cache/Crashpad paths are relative to the working directory)"; exit 1; }
+        # Launcher-level defences must be absolute, so a shortcut with any working
+        # directory behaves the same.
+        grep -qF 'set "BREAKPAD_DUMP_LOCATION=%APP_DIR%Data\Crashpad"' 'Helium Browser.bat' || { echo "  ERROR: launcher must set an absolute BREAKPAD_DUMP_LOCATION"; exit 1; }
+        grep -qF -- '--breakpad-dump-location="%APP_DIR%Data\Crashpad"' 'Helium Browser.bat' || { echo "  ERROR: launcher must pass an absolute --breakpad-dump-location"; exit 1; }
+        grep -qF -- '--disable-crash-reporter' 'Helium Browser.bat' || { echo "  ERROR: launcher must disable the crash reporter"; exit 1; }
         grep -qF 'pushd "%APP_DIR%Helium"' 'Update Helium.bat' || { echo "  ERROR: updater launcher must run from Helium (update.bat resolves paths from its own folder)"; exit 1; }
         grep -qF 'reg import' 'Apply Debloat Policies.bat' || { echo "  ERROR: policy launcher does not import debloater.reg"; exit 1; }
         grep -qF 'call bypass_windows_defender.bat "%APP_DIR%"' 'Defender Exclusion.bat' || { echo "  ERROR: Defender launcher must exclude the package root, not Helium"; exit 1; }
-        for f in 'Helium Browser.bat' 'Update Helium.bat' 'Set Default Browser.bat' 'Apply Debloat Policies.bat' 'Defender Exclusion.bat'; do
+        for f in 'Helium Browser.bat' 'Update Helium.bat' 'Set Default Browser.bat' 'Apply Debloat Policies.bat' 'Defender Exclusion.bat' 'Fix AppData leftovers.bat'; do
           # Strip CR first (CRLF files) and match a real drive path only
           # (letter + colon + slash). A loose [A-Z]: pattern also matches
           # innocent text such as 'echo ERROR: ...'.
@@ -243,6 +253,7 @@ jobs:
         grep -qF 'Phase C — Crashpad location matrix' "$SMOKE" || { echo "  ERROR: missing Crashpad phase (issue #9 evidence)"; exit 1; }
         grep -qF 'Phase E — arm64 archive layout' "$SMOKE" || { echo "  ERROR: missing arm64 archive phase (no-CDM pin)"; exit 1; }
         grep -qF -e '--breakpad-dump-location' "$SMOKE" || { echo "  ERROR: Crashpad phase does not pin the fix flag"; exit 1; }
+        grep -qF -e '--disable-crash-reporter' "$SMOKE" || { echo "  ERROR: smoke run does not exercise --disable-crash-reporter"; exit 1; }
         grep -qF -e '--disable-component-update' "$SMOKE" || { echo "  ERROR: smoke run does not assert the issue #10 flag is absent"; exit 1; }
         echo "  smoke evidence pins: OK"
 

@@ -160,6 +160,9 @@ jobs:
           $browserBat = Get-Content (Join-Path $rootDir 'Helium Browser.bat') -Raw
           Assert ($browserBat -match 'Helium\\chrome.exe') "fresh: browser launcher targets Helium\chrome.exe"
           Assert ($browserBat -match 'cd /d "%APP_DIR%Helium"') "fresh: browser launcher sets Helium\ as working directory"
+          Assert ($browserBat -match 'BREAKPAD_DUMP_LOCATION=%APP_DIR%Data') "fresh: browser launcher sets an absolute BREAKPAD_DUMP_LOCATION"
+          Assert ($browserBat -match '--disable-crash-reporter') "fresh: browser launcher disables the crash reporter"
+          Assert (Test-Path (Join-Path $rootDir 'Fix AppData leftovers.bat')) "fresh: AppData cleanup script present"
           Assert (-not (Test-Path "$app/$ver/WidevineCdm")) "fresh: no versioned WidevineCdm (layout — Chrome ignores it)"
           "chrome.exe ProductVersion: $((Get-Item "$app/chrome.exe").VersionInfo.ProductVersion); size=$((Get-Item "$app/chrome.exe").Length)" | Add-Content "$env:SMOKE/summary.md"
           # Chrome++ version.dll (issue #7 artifact) hijacks app-local version.dll and
@@ -284,6 +287,9 @@ jobs:
           # handler in a live browsing session, which is closer to the reporter's
           # situation (they saw the folder appear while using the browser).
           $f7 = Run-Raw 'f7-headed-window' @('chrome://version') ''
+          # f9 reproduces the SHIPPED launcher flags exactly (absolute dump path,
+          # explicit user-data-dir, crash reporter off).
+          $f9 = Run-Raw 'f9-shipped-launcher-flags' @("--user-data-dir=$root\Data",'--disable-crash-reporter') '' (Join-Path $root 'Data\Crashpad')
           $f8 = Run-Raw 'f8-headed-no-crash-reporter' @('--disable-crash-reporter','chrome://version') ''
           $f2 = Run-Raw 'f2-no-crash-reporter' @('--disable-crash-reporter') ''
           $f3 = Run-Raw 'f3-env-var' @() (Join-Path $root 'Data\Crashpad')
