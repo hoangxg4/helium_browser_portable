@@ -159,7 +159,7 @@ jobs:
           }
           $browserBat = Get-Content (Join-Path $rootDir 'Helium Browser.bat') -Raw
           Assert ($browserBat -match 'Helium\\chrome.exe') "fresh: browser launcher targets Helium\chrome.exe"
-          Assert ($browserBat -match 'cd /d "%~dp0Helium"') "fresh: browser launcher sets Helium\ as working directory"
+          Assert ($browserBat -match 'cd /d "%APP_DIR%Helium"') "fresh: browser launcher sets Helium\ as working directory"
           Assert (-not (Test-Path "$app/$ver/WidevineCdm")) "fresh: no versioned WidevineCdm (layout — Chrome ignores it)"
           "chrome.exe ProductVersion: $((Get-Item "$app/chrome.exe").VersionInfo.ProductVersion); size=$((Get-Item "$app/chrome.exe").Length)" | Add-Content "$env:SMOKE/summary.md"
           # Chrome++ version.dll (issue #7 artifact) hijacks app-local version.dll and
