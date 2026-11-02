@@ -136,4 +136,10 @@ Windows Registry Editor Version 5.00
 "AutoUpdateCheckPeriodMinutes"=dword:00000000
 
 ; Disable component updates
+; NOTE (issue #10): this policy — not the ``--disable-component-update`` command
+; line switch — is what keeps component updates off. The switch also disables
+; registration of *preinstalled* components, which is how Chrome finds the
+; shipped Widevine CDM (Helium\WidevineCdm), so it must stay out of
+; chrome++.ini. This policy blocks downloads/updates without gating
+; preinstalled-component registration.
 "ComponentUpdatesEnabled"=dword:00000000

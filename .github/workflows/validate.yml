@@ -76,6 +76,23 @@ jobs:
         grep -qF 'policy_key=Portable' chrome++.ini || { echo "  ERROR: missing policy_key=Portable"; exit 1; }
         echo "  Paths: OK (data/cache at portable root)"
 
+        # issue #10 regression guard: --disable-component-update also disables
+        # preinstalled-component registration, which is how Chrome finds the
+        # shipped Widevine CDM (Helium\WidevineCdm) — DRM breaks when it is set.
+        # Component updates stay off via debloater.reg (ComponentUpdatesEnabled=0).
+        if grep '^command_line=' chrome++.ini | grep -q -- '--disable-component-update'; then
+          echo "  ERROR: --disable-component-update in command_line breaks Widevine (issue #10)"
+          exit 1
+        fi
+        grep -qF 'ComponentUpdatesEnabled' debloater.reg || { echo "  ERROR: component updates must stay disabled via debloater.reg policy"; exit 1; }
+        echo "  issue #10 guard: OK (no --disable-component-update; policy keeps updates off)"
+
+        # issue #9 regression guard: Crashpad lives in
+        # <default user data dir>\Crashpad on Windows and ignores --user-data-dir,
+        # so chrome++.ini must redirect it into the portable folder.
+        grep '^command_line=' chrome++.ini | grep -q -- '--breakpad-dump-location=' || { echo "  ERROR: command_line must set --breakpad-dump-location (Crashpad leaks to AppData)"; exit 1; }
+        echo "  issue #9 guard: OK (Crashpad redirected into the portable folder)"
+
         echo "  command_line: $(grep 'command_line=' chrome++.ini | sed 's/command_line=//')"
 
     - name: Validate update.bat
@@ -144,8 +161,8 @@ jobs:
         grep -qF '$heliumVer\WidevineCdm' .github/workflows/main.yml && { echo "  ERROR: WidevineCdm nested under version dir — Chrome ignores that path"; exit 1; }
         echo "  hibbiki layout assembly: OK"
 
-        # Unified release scheme: one tag per version, single publish point
-        # (spec: docs/superpowers/specs/2026-09-26-unified-arch-release-design.md §3.5)
+        # Unified release scheme: one tag per version, single publish point.
+        # (design history lived in docs/superpowers, removed from the repo)
         grep -qF 'TAG="helium-portable_${HELIUM_VER}_${PLUS_VER}"' .github/workflows/main.yml || { echo "  ERROR: check job does not build the unified release tag"; exit 1; }
         grep -qE 'tag_name: helium-portable_\$\{\{' .github/workflows/main.yml || { echo "  ERROR: release job tag_name is not the unified scheme"; exit 1; }
         grep -qF 'upload-artifact@v4' .github/workflows/main.yml || { echo "  ERROR: matrix builds must upload artifacts (no direct publish)"; exit 1; }
@@ -153,6 +170,20 @@ jobs:
         SOFTPROPS_COUNT=$(grep -c 'action-gh-release' .github/workflows/main.yml || true)
         [ "$SOFTPROPS_COUNT" -eq 1 ] || { echo "  ERROR: expected exactly 1 action-gh-release publish point, found $SOFTPROPS_COUNT"; exit 1; }
         echo "  Unified release scheme: OK"
+
+    - name: Validate smoke workflow (issue #9 / #10 evidence pins)
+      run: |
+        echo "==> Checking windows-smoke.yml"
+        SMOKE=.github/workflows/windows-smoke.yml
+        # issue #9 / #10: the smoke run must exercise the portable-launch Crashpad
+        # check and the Widevine robustness matrix, otherwise the fixes have no
+        # end-to-end evidence and a regression cannot be distinguished from a
+        # flaky run.
+        grep -qF 'PROBE_ROB_B64' "$SMOKE" || { echo "  ERROR: missing robustness-matrix probe env (L1/L3 evidence)"; exit 1; }
+        grep -qF 'Phase C — Crashpad must stay inside the portable folder' "$SMOKE" || { echo "  ERROR: missing Crashpad phase (issue #9 evidence)"; exit 1; }
+        grep -qF -e '--breakpad-dump-location' "$SMOKE" || { echo "  ERROR: Crashpad phase does not pin the fix flag"; exit 1; }
+        grep -qF -e '--disable-component-update' "$SMOKE" || { echo "  ERROR: smoke run does not assert the issue #10 flag is absent"; exit 1; }
+        echo "  smoke evidence pins: OK"
 
     - name: Validate file structure
       run: |
@@ -165,8 +196,10 @@ jobs:
           "update.bat"
           "README.md"
           "WidevineCdm/manifest.json"
+          "scripts/migrate-unified-releases.sh"
           ".github/workflows/main.yml"
           ".github/workflows/validate.yml"
+          ".github/workflows/windows-smoke.yml"
         )
         ALL_OK=true
         for f in "${REQUIRED[@]}"; do

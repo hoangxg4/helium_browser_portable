@@ -37,6 +37,11 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PROBE_B64: PCFkb2N0eXBlIGh0bWw+PG1ldGEgY2hhcnNldD11dGYtOD48dGl0bGU+cHJvYmU8L3RpdGxlPjxwcmUgaWQ9bz5wZW5kaW5nPC9wcmU+CjxzY3JpcHQ+CmNvbnN0IG89ZG9jdW1lbnQuZ2V0RWxlbWVudEJ5SWQoJ28nKTsKdHJ5ewpuYXZpZ2F0b3IucmVxdWVzdE1lZGlhS2V5U3lzdGVtQWNjZXNzKCdjb20ud2lkZXZpbmUuYWxwaGEnLFt7CiAgdmlkZW9DYXBhYmlsaXRpZXM6W3tjb250ZW50VHlwZTondmlkZW8vbXA0OyBjb2RlY3M9ImF2YzEuNDJFMDFFIid9XSwKICBhdWRpb0NhcGFiaWxpdGllczpbe2NvbnRlbnRUeXBlOidhdWRpby9tcDQ7IGNvZGVjcz0ibXA0YS40MC4yIid9XQp9XSkudGhlbihmdW5jdGlvbigpe28udGV4dENvbnRlbnQ9J0NETV9PSyc7ZG9jdW1lbnQudGl0bGU9J0NETV9PSyc7fSkKLmNhdGNoKGZ1bmN0aW9uKGUpe28udGV4dENvbnRlbnQ9J0NETV9GQUlMOicrZS5uYW1lKyc6JytlLm1lc3NhZ2U7ZG9jdW1lbnQudGl0bGU9J0NETV9GQUlMJzt9KTsKfWNhdGNoKGUpe28udGV4dENvbnRlbnQ9J0NETV9USFJPVzonK2UubmFtZTtkb2N1bWVudC50aXRsZT0nQ0RNX1RIUk9XJzt9Cjwvc2NyaXB0Pgo=
+      # EME robustness-matrix probe: asks com.widevine.alpha once per
+      # robustness level and prints LEVEL=OK/LEVEL=ErrorName pairs, so the
+      # key-system half of the "L1 vs L3" question is measurable on a real
+      # Chrome build (an L3-only CDM answers SW_* and rejects HW_*).
+      PROBE_ROB_B64: PCFkb2N0eXBlIGh0bWw+PG1ldGEgY2hhcnNldD11dGYtOD48dGl0bGU+cGVuZGluZzwvdGl0bGU+PHByZSBpZD1vPnBlbmRpbmc8L3ByZT4KPHNjcmlwdD4KY29uc3QgbGV2ZWxzID0gWycnLCAnU1dfU0VDVVJFX0NSWVBUTycsICdTV19TRUNVUkVfREVDT0RFJywgJ0hXX1NFQ1VSRV9DUllQVE8nLCAnSFdfU0VDVVJFX0RFQ09ERScsICdIV19TRUNVUkVfQUxMJ107CmNvbnN0IG91dCA9IGRvY3VtZW50LmdldEVsZW1lbnRCeUlkKCdvJyk7CmZ1bmN0aW9uIGF0dGVtcHQocm9iKSB7CiAgY29uc3QgYyA9IFt7dmlkZW9DYXBhYmlsaXRpZXM6W3tjb250ZW50VHlwZTondmlkZW8vbXA0OyBjb2RlY3M9ImF2YzEuNDJFMDFFIicsIHJvYnVzdG5lc3M6IHJvYn1dLAogICAgICAgICAgICAgIGF1ZGlvQ2FwYWJpbGl0aWVzOlt7Y29udGVudFR5cGU6J2F1ZGlvL21wNDsgY29kZWNzPSJtcDRhLjQwLjIiJywgcm9idXN0bmVzczogcm9ifV19XTsKICByZXR1cm4gbmV3IFByb21pc2UoZnVuY3Rpb24gKHJlcykgewogICAgY29uc3QgdCA9IHNldFRpbWVvdXQoZnVuY3Rpb24gKCkgeyByZXMoKHJvYnx8J05PTkUnKSArICc9VElNRU9VVCcpOyB9LCAxMjAwMCk7CiAgICBuYXZpZ2F0b3IucmVxdWVzdE1lZGlhS2V5U3lzdGVtQWNjZXNzKCdjb20ud2lkZXZpbmUuYWxwaGEnLCBjKS50aGVuKGZ1bmN0aW9uICgpIHsKICAgICAgY2xlYXJUaW1lb3V0KHQpOyByZXMoKHJvYnx8J05PTkUnKSArICc9T0snKTsKICAgIH0pLmNhdGNoKGZ1bmN0aW9uIChlKSB7CiAgICAgIGNsZWFyVGltZW91dCh0KTsgcmVzKChyb2J8fCdOT05FJykgKyAnPScgKyAoZSAmJiBlLm5hbWUgPyBlLm5hbWUgOiAnRVJSJykpOwogICAgfSk7CiAgfSk7Cn0KY29uc3QgcGFydHMgPSBbXTsKKGZ1bmN0aW9uIHN0ZXAoaSkgewogIGlmIChpID49IGxldmVscy5sZW5ndGgpIHsKICAgIG91dC50ZXh0Q29udGVudCA9IHBhcnRzLmpvaW4oJywnKTsKICAgIGRvY3VtZW50LnRpdGxlID0gcGFydHMuam9pbignLCcpOwogICAgcmV0dXJuOwogIH0KICBhdHRlbXB0KGxldmVsc1tpXSkudGhlbihmdW5jdGlvbiAocikgeyBwYXJ0cy5wdXNoKHIpOyBzdGVwKGkgKyAxKTsgfSk7Cn0pKDApOwo8L3NjcmlwdD4K
 
     steps:
       - name: Resolve latest unified release
@@ -62,6 +67,7 @@ jobs:
       - name: Prepare EME probe page + helper
         run: |
           [IO.File]::WriteAllBytes("$env:SMOKE/probe.html", [Convert]::FromBase64String($env:PROBE_B64))
+          [IO.File]::WriteAllBytes("$env:SMOKE/probe-rob.html", [Convert]::FromBase64String($env:PROBE_ROB_B64))
           $helper = @'
           param([string]$App, [string]$Profile, [string]$Log, [string]$Probe, [string]$Label)
           $exe = Join-Path $App 'chrome.exe'
@@ -125,6 +131,7 @@ jobs:
           '@
           Set-Content -Encoding utf8 "$env:SMOKE/run-probe.ps1" $helper
           if (-not ((Get-Content "$env:SMOKE/probe.html" -Raw) -match 'requestMediaKeySystemAccess')) { throw "probe.html decode failed" }
+          if (-not ((Get-Content "$env:SMOKE/probe-rob.html" -Raw) -match 'SW_SECURE_DECODE')) { throw "probe-rob.html decode failed" }
           "Probe prepared." | Add-Content "$env:SMOKE/summary.md"
 
       - name: Phase A — download, layout asserts, EME probe (fresh install)
@@ -252,6 +259,93 @@ jobs:
 
           if ($fail.Count -gt 0) { throw "Phase B failed: $($fail -join '; ')" }
 
+      - name: Phase C — Crashpad must stay inside the portable folder (issue #9)
+        id: phaseC
+        run: |
+          $fail = [System.Collections.Generic.List[string]]::new()
+          function Assert([bool]$cond, [string]$msg) {
+            if ($cond) { "PASS: $msg" | Add-Content "$env:SMOKE/summary.md" }
+            else { "FAIL: $msg" | Add-Content "$env:SMOKE/summary.md"; $script:fail.Add($msg) }
+          }
+          $root = "$env:SMOKE/fresh/Helium_Portable"
+          $app = "$root/Helium"
+          "" | Add-Content "$env:SMOKE/summary.md"
+          "## Phase C — Crashpad location (issue #9)" | Add-Content "$env:SMOKE/summary.md"
+
+          # Shipped config pin: the fix must be present in the packaged ini.
+          $ini = Get-Content "$app/chrome++.ini" -Raw
+          Assert (($ini -split "`n" | Where-Object { $_ -match '^command_line=' }) -join '' -match '--breakpad-dump-location=') "ini: command_line sets --breakpad-dump-location (issue #9 fix shipped)"
+          Assert (($ini -split "`n" | Where-Object { $_ -match '^command_line=' }) -join '' -notmatch '--disable-component-update') "ini: command_line has no --disable-component-update (issue #10 fix shipped)"
+          if (-not (Test-Path "$app/version.dll")) { Move-Item "$app/version.dll.hidden" "$app/version.dll" -Force }
+          Assert (Test-Path "$app/version.dll") "version.dll restored for the portable-launch test"
+
+          $portableCrashpad = "$root/Data/Crashpad"
+          $imputRoot = Join-Path $env:LOCALAPPDATA 'imput'
+          Remove-Item $imputRoot -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $portableCrashpad -Recurse -Force -ErrorAction SilentlyContinue
+          Assert (-not (Test-Path $imputRoot)) "pre-launch: %LOCALAPPDATA%\imput absent"
+
+          # Launch exactly like a user does: chrome.exe with its own directory as
+          # the working directory (that is what a shortcut does), so a relative
+          # --breakpad-dump-location resolves the same way it would for them.
+          $p = Start-Process -FilePath "$app/chrome.exe" -WorkingDirectory $app -PassThru -WindowStyle Hidden `
+               '--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check',"--user-data-dir=$root/Data"
+          $exited = $p.WaitForExit(60000)
+          if (-not $exited) { $p.Kill($true); $p.WaitForExit(5000) }
+          Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
+          Start-Sleep 3
+
+          $imputNow = (Test-Path $imputRoot)
+          Assert (-not $imputNow) "post-launch: %LOCALAPPDATA%\imput still absent (Crashpad did not leak out of the portable folder)"
+          if ($imputNow) {
+            (Get-ChildItem $imputRoot -Recurse -Force | Select-Object -First 25 | ForEach-Object { $_.FullName }) |
+              Add-Content "$env:SMOKE/summary.md"
+          }
+          $portableCrashpadExists = (Test-Path $portableCrashpad)
+          Assert $portableCrashpadExists "post-launch: Data\Crashpad created inside the portable folder (--breakpad-dump-location honoured)"
+          $dumpLs = @()
+          if (Test-Path "$root/Data") { $dumpLs = Get-ChildItem "$root/Data" -Force -ErrorAction SilentlyContinue | Select-Object -First 20 | ForEach-Object { $_.Name } }
+          "Data\ contents: $($dumpLs -join ', ')" | Add-Content "$env:SMOKE/summary.md"
+          "stderr CDM/crashpad lines:" | Add-Content "$env:SMOKE/summary.md"
+          $cpLog = Get-ChildItem $env:SMOKE -Filter 'dump-*-err.txt' -ErrorAction SilentlyContinue |
+            ForEach-Object { Get-Content $_.FullName -ErrorAction SilentlyContinue | Where-Object { $_ -match 'crashpad|crash-dumps|breakpad' } | Select-Object -First 3 }
+          if ($cpLog) { $cpLog | Add-Content "$env:SMOKE/summary.md" } else { "- none" | Add-Content "$env:SMOKE/summary.md" }
+
+          if ($fail.Count -gt 0) { throw "Phase C failed: $($fail -join '; ')" }
+
+      - name: Phase D — Widevine robustness matrix (L1 vs L3, real chrome.exe)
+        id: phaseD
+        run: |
+          $root = "$env:SMOKE/fresh/Helium_Portable"
+          $app = "$root/Helium"
+          "" | Add-Content "$env:SMOKE/summary.md"
+          "## Phase D — Widevine robustness matrix (L1 vs L3)" | Add-Content "$env:SMOKE/summary.md"
+          if (-not (Test-Path "$app/version.dll.hidden")) { Move-Item "$app/version.dll" "$app/version.dll.hidden" -Force }
+          Move-Item "$app/WidevineCdm" "$app/WidevineCdm-flat" -Force -ErrorAction SilentlyContinue
+          $uri = 'file:///' + ("$env:SMOKE/probe-rob.html" -replace '\\', '/')
+          $out = "$env:SMOKE/dump-rob-out.txt"; $err = "$env:SMOKE/dump-rob-err.txt"
+          $argList = @('--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check',
+                       '--disable-crash-reporter',"--user-data-dir=$env:SMOKE/profileD",
+                       '--virtual-time-budget=60000','--dump-dom',$uri)
+          try {
+            $p = Start-Process -FilePath "$app/chrome.exe" -ArgumentList $argList -PassThru -NoNewWindow `
+              -RedirectStandardOutput $out -RedirectStandardError $err
+            if (-not $p.WaitForExit(180000)) { $p.Kill($true); $p.WaitForExit(5000) }
+          } catch { "START_FAILED: $($_.Exception.Message)" | Add-Content "$env:SMOKE/summary.md" }
+          Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
+          $dom = if (Test-Path $out) { Get-Content $out -Raw } else { '' }
+          Move-Item "$app/WidevineCdm-flat" "$app/WidevineCdm" -Force -ErrorAction SilentlyContinue
+          $rob = 'NO_RESULT'
+          if ($dom -match '(?s)<pre id="o">([^<]+)</pre>') {
+            $pre = $Matches[1].Trim()
+            if ($pre -ne 'pending' -and $pre -ne '') { $rob = $pre }
+          }
+          $rob | Set-Content "$env:SMOKE/eme-rob.txt"
+          "Robustness matrix: $rob" | Add-Content "$env:SMOKE/summary.md"
+          "Meaning — NONE=no security requirement; SW_*=software (L3) paths; HW_*=hardware (L1) paths. A software-CDM build answers SW_* and rejects HW_*; an L3-only device cannot be upgraded to L1 from a portable zip (L1 needs OEM-provisioned hardware TEE, not a shipped file)." | Add-Content "$env:SMOKE/summary.md"
+          (Get-Content $err -ErrorAction SilentlyContinue | Where-Object { $_ -match 'widevine|cdm' } | Select-Object -First 5) |
+            Add-Content "$env:SMOKE/summary.md"
+
       - name: "Verdict — issue #5 resolved or confirmed"
         if: always()
         run: |
@@ -264,6 +358,16 @@ jobs:
             return @{ eme = $eme; comp = $comp }
           }
           function Test-Comp([string]$c) { return $c -match '^\d+\.\d+\.\d+\.\d+$' -and $c -ne '0.0.0.0' }
+          # Phase C/D artifacts (issue #9 Crashpad + L1/L3 matrix). These files
+          # are written with Set-Content, so read them as plain text.
+          $imputLeak = 'MISSING'
+          if (Test-Path "$env:SMOKE/summary.md") {
+            $cText = Get-Content "$env:SMOKE/summary.md" -Raw
+            if ($cText -match 'post-launch: %LOCALAPPDATA%\\imput still absent') { $imputLeak = 'ABSENT' }
+            if ($cText -match 'FAIL: post-launch: %LOCALAPPDATA%\\imput still absent') { $imputLeak = 'LEAKED' }
+          }
+          $rob = 'MISSING'
+          if (Test-Path "$env:SMOKE/eme-rob.txt") { $rob = (Get-Content "$env:SMOKE/eme-rob.txt" -Raw).Trim() }
           $A0 = Read-Result "$env:SMOKE/emeA.txt"
           $P1 = Read-Result "$env:SMOKE/emeP1.txt"
           $P2 = Read-Result "$env:SMOKE/emeP2.txt"
@@ -311,6 +415,19 @@ jobs:
           } else {
             $fails += "EME unavailable in CI: A0=$($A0.eme), P1=$($P1.eme), P2=$($P2.eme)"
             "**EME UNAVAILABLE IN CI** — no CDM location resolves under headless Windows CI (flat A0=$($A0.eme), versioned P1=$($P1.eme), chrome-ver P2=$($P2.eme)); chrome cannot be validated remotely in this environment. Filesystem asserts above (flat layout, migration, version bump, protected files) still stand as #5 evidence. See stderr lines above for chrome's own CDM messages." | Add-Content $summary
+          }
+
+          "" | Add-Content $summary
+          "## Issue #9 (Crashpad stays portable) + L1/L3 matrix" | Add-Content $summary
+          "- Crashpad leak check (%LOCALAPPDATA%\imput after a real portable launch): $imputLeak" | Add-Content $summary
+          "- Widevine robustness matrix: $rob" | Add-Content $summary
+          if ($imputLeak -eq 'LEAKED') {
+            $fails += "issue #9 regression: Crashpad recreated %LOCALAPPDATA%\imput"
+            "**#9 REGRESSION** — the shipped --breakpad-dump-location did not keep Crashpad inside the portable folder; see Phase C." | Add-Content $summary
+          } elseif ($imputLeak -eq 'ABSENT') {
+            "**#9 VERIFIED** — no %LOCALAPPDATA%\imput is created after a portable launch; Crashpad stays under Data\Crashpad." | Add-Content $summary
+          } else {
+            "**#9 NOT MEASURED** — Phase C did not run to completion." | Add-Content $summary
           }
 
           "" | Add-Content $summary

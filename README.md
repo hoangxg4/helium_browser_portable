@@ -34,11 +34,21 @@ Helium_Portable/
 ```
 
 ### Files (inside `Helium/`)
-- `chrome++.ini` — Chrome++ configuration (data at `../Data`, cache at `../Cache`)
-- `debloater.reg` — Disable unnecessary Chromium features
+- `chrome++.ini` — Chrome++ configuration (data at `../Data`, cache at `../Cache`, Crashpad at `../Data/Crashpad`)
+- `debloater.reg` — Disable unnecessary Chromium features (import once; also the switch that keeps component updates off)
 - `default-apps-multi-profile.bat` — Set Helium as default browser
 - `update.bat` — Auto-update to the latest Helium release
 - `bypass_windows_defender.bat` — Add/remove Windows Defender exclusion for the whole portable folder
+
+### Widevine / DRM notes
+- The CDM is preinstalled at `Helium\WidevineCdm` (flat, next to `chrome.exe`). That is the only path Chrome 154+
+  registers a preinstalled CDM from — a versioned `Helium\<ver>\WidevineCdm` nesting is ignored.
+- `chrome++.ini` must **not** carry `--disable-component-update`: it also disables registration of *preinstalled*
+  components, so the shipped CDM would never be found. Component updates stay disabled through the
+  `ComponentUpdatesEnabled=0` policy in `debloater.reg` instead.
+- Playback security level is decided by the CDM + license server, not by this package: the shipped CDM answers the
+  software levels (`SW_SECURE_CRYPTO` / `SW_SECURE_DECODE`, i.e. L3) and does not offer hardware levels
+  (`HW_SECURE_*`, i.e. L1), which need OEM-provisioned hardware. The smoke workflow measures both.
 
 ### Usage
 1. Download the latest release zip

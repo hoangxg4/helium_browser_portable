@@ -149,6 +149,23 @@ jobs:
         # Write version file
         Set-Content -Path "Helium_Portable\Helium\version.txt" -Value "$heliumVer"
 
+        # Portable-behaviour guards on the config we are about to ship.
+        # issue #10: --disable-component-update also stops preinstalled-component
+        # registration, i.e. Chrome never finds the shipped WidevineCdm → DRM
+        # breaks. issue #9: Crashpad is stored in <default user data dir>\Crashpad
+        # on Windows and ignores --user-data-dir, so the config must redirect it
+        # into the portable folder or every launch recreates
+        # %LOCALAPPDATA%\imput\Helium\User Data\Crashpad.
+        $iniLines = Get-Content "Helium_Portable\Helium\chrome++.ini" | Where-Object { $_ -match '^command_line=' }
+        if ($iniLines -match '--disable-component-update') {
+          Write-Error "shipped chrome++.ini contains --disable-component-update (breaks Widevine, issue #10) — aborting"
+          exit 1
+        }
+        if (-not ($iniLines -match '--breakpad-dump-location=')) {
+          Write-Error "shipped chrome++.ini does not redirect Crashpad (AppData leak, issue #9) — aborting"
+          exit 1
+        }
+
         # Safety net: never ship a zip without version.dll — portable data
         # (chrome++.ini data_dir) only works when Chrome++ DLL is loaded.
         if (-not (Test-Path "Helium_Portable\Helium\version.dll")) {
