@@ -62,7 +62,9 @@ jobs:
             url = $asset.browser_download_url
           }.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8 }
           New-Item -ItemType Directory -Force $env:SMOKE | Out-Null
-          "Baseline release: $($r.tag_name) (Helium $ver)" | Set-Content -Encoding utf8 "$env:SMOKE/summary.md"
+          "SMOKE_LATEST_TAG=$($r.tag_name)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "SMOKE_LATEST_PUB=$($r.published_at)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "Baseline release: $($r.tag_name) (Helium $ver), published $($r.published_at)" | Set-Content -Encoding utf8 "$env:SMOKE/summary.md"
 
       - name: Prepare EME probe page + helper
         run: |
@@ -163,6 +165,11 @@ jobs:
           Assert ($browserBat -match 'BREAKPAD_DUMP_LOCATION=%APP_DIR%Data') "fresh: browser launcher sets an absolute BREAKPAD_DUMP_LOCATION"
           Assert ($browserBat -match '--disable-crash-reporter') "fresh: browser launcher disables the crash reporter"
           Assert (Test-Path (Join-Path $rootDir 'Fix AppData leftovers.bat')) "fresh: AppData cleanup script present"
+          # Artifact freshness: this workflow downloads the published release, so a
+          # run fired in parallel with a build would silently test the PREVIOUS
+          # zip (that produced three false FAILs on 2026-11-02). Record what was
+          # actually tested so a stale asset is obvious in the summary.
+          "artifact under test: $env:SMOKE_LATEST_TAG (published $env:SMOKE_LATEST_PUB)" | Add-Content "$env:SMOKE/summary.md"
           Assert (-not (Test-Path "$app/$ver/WidevineCdm")) "fresh: no versioned WidevineCdm (layout — Chrome ignores it)"
           "chrome.exe ProductVersion: $((Get-Item "$app/chrome.exe").VersionInfo.ProductVersion); size=$((Get-Item "$app/chrome.exe").Length)" | Add-Content "$env:SMOKE/summary.md"
           # Chrome++ version.dll (issue #7 artifact) hijacks app-local version.dll and
