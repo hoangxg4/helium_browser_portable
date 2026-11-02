@@ -109,10 +109,26 @@ jobs:
 
         curl -sSL "$heliumUrl" -o helium.zip
         curl -sSL "${{ needs.check.outputs.plus_url }}" -o chrome_plus.7z
-        curl -sSL https://www.7-zip.org/a/7zr.exe -o 7zr.exe
+
+        # 7-Zip: prefer the runner's preinstalled copy, then a 7zr.exe that is
+        # already in the workspace, and only then fetch 7zr.exe from the
+        # internet. A DNS blip on www.7-zip.org used to abort the whole build.
+        $sevenZip = $null
+        foreach ($cand in @("$env:ProgramFiles\7-Zip\7z.exe", "${env:ProgramFiles(x86)}\7-Zip\7z.exe", "$PWD\7zr.exe")) {
+          if (Test-Path $cand) { $sevenZip = $cand; break }
+        }
+        if (-not $sevenZip) {
+          try {
+            curl.exe -fsSL https://www.7-zip.org/a/7zr.exe -o 7zr.exe
+            if (Test-Path "$PWD\7zr.exe") { $sevenZip = "$PWD\7zr.exe" }
+          } catch { }
+        }
+        if (-not $sevenZip) { Write-Error "no 7-Zip extractor available (preinstalled or downloadable) — aborting"; exit 1 }
+        Write-Host "7-Zip: $sevenZip"
 
         Expand-Archive -Path helium.zip -DestinationPath helium_extracted -Force
-        ./7zr.exe x chrome_plus.7z -y
+        & $sevenZip x chrome_plus.7z -y
+        if ($LASTEXITCODE -ne 0) { Write-Error "7-Zip failed to extract chrome_plus.7z (exit $LASTEXITCODE) — aborting"; exit 1 }
 
         # hibbiki-style layout: everything fixed lives under Helium_Portable\Helium\
         New-Item -Force -Type Directory Helium_Portable\Helium | Out-Null

@@ -11,7 +11,17 @@ jobs:
     - uses: actions/checkout@v4
     
     - name: Download 7z
-      run: curl -L https://www.7-zip.org/a/7zr.exe -o 7zr.exe
+      run: |
+        # Prefer the runner's preinstalled 7-Zip; the download is only a fallback
+        # (a DNS blip on www.7-zip.org used to abort this workflow).
+        if [ -x "/c/Program Files/7-Zip/7z.exe" ]; then
+          cp "/c/Program Files/7-Zip/7z.exe" 7zr.exe
+        elif [ -f 7zr.exe ]; then
+          echo "7zr.exe already present"
+        else
+          curl -fL https://www.7-zip.org/a/7zr.exe -o 7zr.exe
+        fi
+        ls -la 7zr.exe
       shell: bash
     
     - name: Download and update
