@@ -201,6 +201,95 @@ jobs:
             throw "Phase A failed: $($fail -join '; ')"
           }
 
+      - name: Phase F — manual-launch matrix (raw shortcut invocation)
+        id: phaseF
+        # Measurement phase: it must never stop the other phases from running,
+        # because its own verdict is what tells us whether the mitigation works.
+        continue-on-error: true
+        run: |
+          $fail = [System.Collections.Generic.List[string]]::new()
+          function Assert([bool]$cond, [string]$msg) {
+            if ($cond) { "PASS: $msg" | Add-Content "$env:SMOKE/summary.md" }
+            else { "FAIL: $msg" | Add-Content "$env:SMOKE/summary.md"; $script:fail.Add($msg) }
+          }
+          "" | Add-Content "$env:SMOKE/summary.md"
+          "## Phase F — manual launch matrix (raw chrome.exe, like a user shortcut)" | Add-Content "$env:SMOKE/summary.md"
+
+          # Reproduces issue #9 exactly as reported: chrome.exe invoked directly
+          # (no Chrome++ loader), so the *default* user data directory rules and
+          # the browser may create %LOCALAPPDATA%\imput\Helium. The reporter still
+          # sees it, so this matrix answers empirically what stops it:
+          #   f1 shipped-style flags, raw exe, no --user-data-dir
+          #   f2 shipped + --disable-crash-reporter
+          #   f3 shipped + BREAKPAD_DUMP_LOCATION env var
+          #   f4 control: no --breakpad-dump-location at all
+          $app = "$env:SMOKE/fresh/Helium_Portable/Helium"
+          $root = "$env:SMOKE/fresh/Helium_Portable"
+          $imputRoot = Join-Path $env:LOCALAPPDATA 'imput'
+
+          $cwdNow = (Get-Location).Path
+          "diag: job cwd=[$cwdNow]; a raw launcher in Helium\\ with working directory Helium\\ resolves ..\\Data\\Crashpad to [$app\\..\\Data\\Crashpad]" | Add-Content "$env:SMOKE/summary.md"
+
+          # f5/f6 decide what the shipped default should be:
+          #   f5 passes the relative resolved to an absolute path (what a launcher
+          #      can compute itself, working directory independent)
+          #   f6 passes "%LOCALAPPDATA%" literally, to see whether Chromium expands
+          #      environment variables inside a switch value (which would let the
+          #      ini itself be location independent)
+          function Run-Raw([string]$label, [string[]]$extra, [string]$envValue, [string]$dumpLoc) {
+            $dumpLoc = if ($dumpLoc) { $dumpLoc } else { '..\Data\Crashpad' }
+            Remove-Item $imputRoot -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item "$root/Data" -Recurse -Force -ErrorAction SilentlyContinue
+            if ($envValue) { $env:BREAKPAD_DUMP_LOCATION = $envValue } else { Remove-Item Env:BREAKPAD_DUMP_LOCATION -ErrorAction SilentlyContinue }
+            $errF = "$env:SMOKE/raw-$label-err.txt"
+            $launchArgs = @('--no-first-run','--no-default-browser-check',
+                            '--headless=new','--disable-gpu',
+                            "--breakpad-dump-location=$dumpLoc",'about:blank') + $extra
+            $workDir = $app
+            try {
+              $p = Start-Process -FilePath "$app\chrome.exe" -ArgumentList $launchArgs `
+                   -WorkingDirectory $workDir -PassThru -WindowStyle Hidden `
+                   -RedirectStandardError $errF -RedirectStandardOutput "$env:SMOKE/raw-$label-out.txt"
+              if (-not $p.WaitForExit(45000)) { try { $p.Kill($true) } catch {} ; $p.WaitForExit(5000) }
+            } catch {
+              "  [$label] launch failed: $($_.Exception.Message)" | Add-Content "$env:SMOKE/summary.md"
+            }
+            Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
+            Start-Sleep 2
+            $base = Test-Path (Join-Path $imputRoot 'Helium')
+            $crash = Test-Path (Join-Path $imputRoot 'Helium\User Data\Crashpad')
+            $portable = Test-Path "$root/Data/Crashpad"
+            $diag = ''
+            if (Test-Path $errF) {
+              $diag = ((Get-Content $errF -ErrorAction SilentlyContinue |
+                        Where-Object { $_ -match 'breakpad|crashpad|crash-dumps|DIR_CRASH' } |
+                        Select-Object -First 3) -join ' || ')
+            }
+            "[$label] imput\Helium=$base; imput Crashpad=$crash; portableCrashpad=$portable; stderr=[$diag]" | Add-Content "$env:SMOKE/summary.md"
+            return @{ base = $base; crash = $crash; portable = $portable }
+          }
+
+          $f1 = Run-Raw 'f1-raw-shipped' @() ''
+          $absDump = Join-Path $root 'Data\Crashpad'
+          $f5 = Run-Raw 'f5-absolute-path' @() '' $absDump
+          $f6 = Run-Raw 'f6-percent-localappdata' @() '' '%LOCALAPPDATA%\HeliumPortableCrashpad'
+          $f2 = Run-Raw 'f2-no-crash-reporter' @('--disable-crash-reporter') ''
+          $f3 = Run-Raw 'f3-env-var' @() (Join-Path $root 'Data\Crashpad')
+          $f4 = Run-Raw 'f4-control-no-flag' @('--disable-crash-reporter') ''
+
+          "issue9-base=$(($f1.base -or $f2.base -or $f3.base -or $f4.base))" | Set-Content "$env:SMOKE/issue9b.txt"
+          $f6dir = Join-Path (Join-Path $env:LOCALAPPDATA 'HeliumPortableCrashpad') ''
+          "[f6 follow-up] %LOCALAPPDATA% literal result: imput\Helium=$($f6.base); portableCrashpad=$($f6.portable); percent-dir-exists=$(Test-Path $f6dir)" | Add-Content "$env:SMOKE/summary.md"
+          Assert (-not ($f2.base -or $f3.base)) "no variant with the mitigation recreated %LOCALAPPDATA%\imput\Helium"
+          if ($f1.base -and -not $f2.base -and -not $f3.base) {
+            "DIAGNOSIS: the AppData leak is reproducible with the shipped flags alone and is fixed by --disable-crash-reporter and by BREAKPAD_DUMP_LOCATION." | Add-Content "$env:SMOKE/summary.md"
+          } elseif ($f1.base -and $f2.base) {
+            "DIAGNOSIS: neither mitigation prevents it — the base folder is created regardless of Crashpad." | Add-Content "$env:SMOKE/summary.md"
+          } elseif (-not $f1.base) {
+            "DIAGNOSIS: not reproducible in CI with a raw launcher; the reporter's environment differs (see their shortcut working directory)." | Add-Content "$env:SMOKE/summary.md"
+          }
+          if ($fail.Count -gt 0) { throw "Phase F failed: $($fail -join '; ')" }
+
       - name: Phase B — simulate old install + run real update.bat
         id: phaseB
         run: |
@@ -226,9 +315,27 @@ jobs:
           "## Update flow (version.txt forced to 0.0.0.0)" | Add-Content "$env:SMOKE/summary.md"
 
           # Upstream latest, for post-update expectations.
+          # Retry first: a rate-limited lookup would make update.bat a no-op, and
+          # "the CDM broke after update" would then be a FALSE diagnosis.
           $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = "application/vnd.github+json" }
-          $up = Invoke-RestMethod -Headers $h "https://api.github.com/repos/imputnet/helium-windows/releases?per_page=10"
-          $expected = ($up | Where-Object { -not $_.prerelease } | Select-Object -First 1).tag_name
+          $expected = $null
+          foreach ($attempt in 1..4) {
+            try {
+              $up = Invoke-RestMethod -Headers $h "https://api.github.com/repos/imputnet/helium-windows/releases?per_page=10"
+              $expected = ($up | Where-Object { -not $_.prerelease } | Select-Object -First 1).tag_name
+              if ($expected) { break }
+            } catch {
+              "attempt $attempt to read upstream releases failed: $($_.Exception.Message)" | Add-Content "$env:SMOKE/summary.md"
+              Start-Sleep -Seconds (5 * $attempt)
+            }
+          }
+          if (-not $expected) {
+            "SKIP: upstream release list unavailable (API rate limit/unreachable) — the update flow was NOT exercised, so no DRM conclusion may be drawn from this phase." | Add-Content "$env:SMOKE/summary.md"
+            "rated=true" | Set-Content "$env:SMOKE/phaseB-skew.txt"
+            "" | Add-Content "$env:SMOKE/summary.md"
+            "## Update flow skipped (upstream lookup unavailable)" | Add-Content "$env:SMOKE/summary.md"
+            return
+          }
           "Upstream latest: $expected" | Add-Content "$env:SMOKE/summary.md"
           $expected | Set-Content "$env:SMOKE/expected.txt"
 
@@ -395,92 +502,6 @@ jobs:
           (Get-Content $err -ErrorAction SilentlyContinue | Where-Object { $_ -match 'widevine|cdm' } | Select-Object -First 5) |
             Add-Content "$env:SMOKE/summary.md"
 
-      - name: Phase F — manual-launch matrix (raw shortcut invocation)
-        id: phaseF
-        run: |
-          $fail = [System.Collections.Generic.List[string]]::new()
-          function Assert([bool]$cond, [string]$msg) {
-            if ($cond) { "PASS: $msg" | Add-Content "$env:SMOKE/summary.md" }
-            else { "FAIL: $msg" | Add-Content "$env:SMOKE/summary.md"; $script:fail.Add($msg) }
-          }
-          "" | Add-Content "$env:SMOKE/summary.md"
-          "## Phase F — manual launch matrix (raw chrome.exe, like a user shortcut)" | Add-Content "$env:SMOKE/summary.md"
-
-          # Reproduces issue #9 exactly as reported: chrome.exe invoked directly
-          # (no Chrome++ loader), so the *default* user data directory rules and
-          # the browser may create %LOCALAPPDATA%\imput\Helium. The reporter still
-          # sees it, so this matrix answers empirically what stops it:
-          #   f1 shipped-style flags, raw exe, no --user-data-dir
-          #   f2 shipped + --disable-crash-reporter
-          #   f3 shipped + BREAKPAD_DUMP_LOCATION env var
-          #   f4 control: no --breakpad-dump-location at all
-          $app = "$env:SMOKE/fresh/Helium_Portable/Helium"
-          $root = "$env:SMOKE/fresh/Helium_Portable"
-          $imputRoot = Join-Path $env:LOCALAPPDATA 'imput'
-
-          $cwdNow = (Get-Location).Path
-          "diag: job cwd=[$cwdNow]; a raw launcher in Helium\\ with working directory Helium\\ resolves ..\\Data\\Crashpad to [$app\\..\\Data\\Crashpad]" | Add-Content "$env:SMOKE/summary.md"
-
-          # f5/f6 decide what the shipped default should be:
-          #   f5 passes the relative resolved to an absolute path (what a launcher
-          #      can compute itself, working directory independent)
-          #   f6 passes "%LOCALAPPDATA%" literally, to see whether Chromium expands
-          #      environment variables inside a switch value (which would let the
-          #      ini itself be location independent)
-          function Run-Raw([string]$label, [string[]]$extra, [string]$envValue, [string]$dumpLoc) {
-            $dumpLoc = if ($dumpLoc) { $dumpLoc } else { '..\Data\Crashpad' }
-            Remove-Item $imputRoot -Recurse -Force -ErrorAction SilentlyContinue
-            Remove-Item "$root/Data" -Recurse -Force -ErrorAction SilentlyContinue
-            if ($envValue) { $env:BREAKPAD_DUMP_LOCATION = $envValue } else { Remove-Item Env:BREAKPAD_DUMP_LOCATION -ErrorAction SilentlyContinue }
-            $errF = "$env:SMOKE/raw-$label-err.txt"
-            $launchArgs = @('--no-first-run','--no-default-browser-check',
-                            '--headless=new','--disable-gpu',
-                            "--breakpad-dump-location=$dumpLoc",'about:blank') + $extra
-            $workDir = $app
-            try {
-              $p = Start-Process -FilePath "$app\chrome.exe" -ArgumentList $launchArgs `
-                   -WorkingDirectory $workDir -PassThru -WindowStyle Hidden `
-                   -RedirectStandardError $errF -RedirectStandardOutput "$env:SMOKE/raw-$label-out.txt"
-              if (-not $p.WaitForExit(45000)) { try { $p.Kill($true) } catch {} ; $p.WaitForExit(5000) }
-            } catch {
-              "  [$label] launch failed: $($_.Exception.Message)" | Add-Content "$env:SMOKE/summary.md"
-            }
-            Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
-            Start-Sleep 2
-            $base = Test-Path (Join-Path $imputRoot 'Helium')
-            $crash = Test-Path (Join-Path $imputRoot 'Helium\User Data\Crashpad')
-            $portable = Test-Path "$root/Data/Crashpad"
-            $diag = ''
-            if (Test-Path $errF) {
-              $diag = ((Get-Content $errF -ErrorAction SilentlyContinue |
-                        Where-Object { $_ -match 'breakpad|crashpad|crash-dumps|DIR_CRASH' } |
-                        Select-Object -First 3) -join ' || ')
-            }
-            "[$label] imput\Helium=$base; imput Crashpad=$crash; portableCrashpad=$portable; stderr=[$diag]" | Add-Content "$env:SMOKE/summary.md"
-            return @{ base = $base; crash = $crash; portable = $portable }
-          }
-
-          $f1 = Run-Raw 'f1-raw-shipped' @() ''
-          $absDump = Join-Path $root 'Data\Crashpad'
-          $f5 = Run-Raw 'f5-absolute-path' @() '' $absDump
-          $f6 = Run-Raw 'f6-percent-localappdata' @() '' '%LOCALAPPDATA%\HeliumPortableCrashpad'
-          $f2 = Run-Raw 'f2-no-crash-reporter' @('--disable-crash-reporter') ''
-          $f3 = Run-Raw 'f3-env-var' @() (Join-Path $root 'Data\Crashpad')
-          $f4 = Run-Raw 'f4-control-no-flag' @('--disable-crash-reporter') ''
-
-          "issue9-base=$(($f1.base -or $f2.base -or $f3.base -or $f4.base))" | Set-Content "$env:SMOKE/issue9b.txt"
-          $f6dir = Join-Path (Join-Path $env:LOCALAPPDATA 'HeliumPortableCrashpad') ''
-          "[f6 follow-up] %LOCALAPPDATA% literal result: imput\Helium=$($f6.base); portableCrashpad=$($f6.portable); percent-dir-exists=$(Test-Path $f6dir)" | Add-Content "$env:SMOKE/summary.md"
-          Assert (-not ($f2.base -or $f3.base)) "no variant with the mitigation recreated %LOCALAPPDATA%\imput\Helium"
-          if ($f1.base -and -not $f2.base -and -not $f3.base) {
-            "DIAGNOSIS: the AppData leak is reproducible with the shipped flags alone and is fixed by --disable-crash-reporter and by BREAKPAD_DUMP_LOCATION." | Add-Content "$env:SMOKE/summary.md"
-          } elseif ($f1.base -and $f2.base) {
-            "DIAGNOSIS: neither mitigation prevents it — the base folder is created regardless of Crashpad." | Add-Content "$env:SMOKE/summary.md"
-          } elseif (-not $f1.base) {
-            "DIAGNOSIS: not reproducible in CI with a raw launcher; the reporter's environment differs (see their shortcut working directory)." | Add-Content "$env:SMOKE/summary.md"
-          }
-          if ($fail.Count -gt 0) { throw "Phase F failed: $($fail -join '; ')" }
-
       - name: Phase E — arm64 archive layout (no CDM, launchers present)
         id: phaseE
         run: |
@@ -583,7 +604,10 @@ jobs:
           $okA0 = $A0.eme -eq 'CDM_OK'
           $okB0 = $B0.eme -eq 'CDM_OK'
 
-          if ($B0.eme -eq 'MISSING') {
+          $bSkipped = (Test-Path "$env:SMOKE/phaseB-skew.txt") -and ((Get-Content "$env:SMOKE/phaseB-skew.txt" -Raw).Trim() -eq 'rated=true')
+          if ($bSkipped) {
+            "**PHASE B SKIPPED (upstream lookup unavailable)** — update.bat never ran a real update (GitHub API rate limit on the shared runner IP), so no DRM conclusion is drawn. Phase A evidence stands; re-run when the API is reachable." | Add-Content $summary
+          } elseif ($B0.eme -eq 'MISSING') {
             $fails += "Phase B did not run or produced no result (earlier step failed)"
             "**PHASE B MISSING** — the update-flow verification did not complete; see the failed step above." | Add-Content $summary
           } elseif ($okA0 -and $okB0) {
