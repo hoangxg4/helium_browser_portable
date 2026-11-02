@@ -246,11 +246,18 @@ jobs:
                             '--headless=new','--disable-gpu',
                             "--breakpad-dump-location=$dumpLoc",'about:blank') + $extra
             $workDir = $app
+            $windows = -not ($launchArgs -contains '--headless=new')
             try {
-              $p = Start-Process -FilePath "$app\chrome.exe" -ArgumentList $launchArgs `
-                   -WorkingDirectory $workDir -PassThru -WindowStyle Hidden `
-                   -RedirectStandardError $errF -RedirectStandardOutput "$env:SMOKE/raw-$label-out.txt"
-              if (-not $p.WaitForExit(45000)) { try { $p.Kill($true) } catch {} ; $p.WaitForExit(5000) }
+              if ($windows) {
+                $p = Start-Process -FilePath "$app\chrome.exe" -ArgumentList $launchArgs `
+                     -WorkingDirectory $workDir -PassThru
+                Start-Sleep -Seconds 12
+              } else {
+                $p = Start-Process -FilePath "$app\chrome.exe" -ArgumentList $launchArgs `
+                     -WorkingDirectory $workDir -PassThru -WindowStyle Hidden `
+                     -RedirectStandardError $errF -RedirectStandardOutput "$env:SMOKE/raw-$label-out.txt"
+                if (-not $p.WaitForExit(45000)) { try { $p.Kill($true) } catch {} ; $p.WaitForExit(5000) }
+              }
             } catch {
               "  [$label] launch failed: $($_.Exception.Message)" | Add-Content "$env:SMOKE/summary.md"
             }
@@ -273,6 +280,11 @@ jobs:
           $absDump = Join-Path $root 'Data\Crashpad'
           $f5 = Run-Raw 'f5-absolute-path' @() '' $absDump
           $f6 = Run-Raw 'f6-percent-localappdata' @() '' '%LOCALAPPDATA%\HeliumPortableCrashpad'
+          # f7/f8: a real window that stays alive. Crashpad only tends to start a
+          # handler in a live browsing session, which is closer to the reporter's
+          # situation (they saw the folder appear while using the browser).
+          $f7 = Run-Raw 'f7-headed-window' @('chrome://version') ''
+          $f8 = Run-Raw 'f8-headed-no-crash-reporter' @('--disable-crash-reporter','chrome://version') ''
           $f2 = Run-Raw 'f2-no-crash-reporter' @('--disable-crash-reporter') ''
           $f3 = Run-Raw 'f3-env-var' @() (Join-Path $root 'Data\Crashpad')
           $f4 = Run-Raw 'f4-control-no-flag' @('--disable-crash-reporter') ''
