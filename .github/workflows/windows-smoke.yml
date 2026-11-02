@@ -463,7 +463,7 @@ jobs:
           "" | Add-Content $summary
           "## Issue #9 (Crashpad stays portable) + L1/L3 matrix" | Add-Content $summary
           "- Crashpad leak check over 4 launch variants (%LOCALAPPDATA%\imput): $imputLeak (Crashpad initialised: $cpInit)" | Add-Content $summary
-          "- Widevine robustness matrix: $rob" | Add-Content $summary
+          "- Widevine robustness matrix (best-effort, headless-unreliable): $rob" | Add-Content $summary
           "- Phase D CDM registration log: $robCdm" | Add-Content $summary
           if ($imputLeak -eq 'LEAKED') {
             $fails += "issue #9 regression: Crashpad recreated %LOCALAPPDATA%\imput"
