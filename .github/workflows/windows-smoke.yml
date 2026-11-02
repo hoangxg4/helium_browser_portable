@@ -344,14 +344,14 @@ jobs:
           Move-Item "$app/WidevineCdm" "$app/WidevineCdm-flat" -Force -ErrorAction SilentlyContinue
           $uri = 'file:///' + ("$env:SMOKE/probe-rob.html" -replace '\\', '/')
           $out = "$env:SMOKE/dump-rob-out.txt"; $err = "$env:SMOKE/dump-rob-err.txt"
-          # NOTE: no --virtual-time-budget here. Virtual time does not advance the
-          # CDM's own async initialisation, so an asynchronous robustness probe
-          # times out on every level instead of reporting it (observed: 5x TIMEOUT
-          # with only HW_SECURE_ALL answered). Use real time and read the completed
-          # DOM after the dump.
+          # NOTE: neither --virtual-time-budget nor --timeout is usable here.
+          # Virtual time does not advance the CDM's own async initialisation (the
+          # matrix came back 5x TIMEOUT with only HW_SECURE_ALL answered), and
+          # --timeout makes chrome exit on its own so --dump-dom never prints.
+          # The probe bounds itself (6 levels x 12 s) and the wait below covers it.
           $argList = @('--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check',
                        '--disable-crash-reporter',"--user-data-dir=$env:SMOKE/profileD",
-                       '--timeout=40000','--dump-dom',$uri)
+                       '--dump-dom',$uri)
           try {
             $p = Start-Process -FilePath "$app/chrome.exe" -ArgumentList $argList -PassThru -NoNewWindow `
               -RedirectStandardOutput $out -RedirectStandardError $err
