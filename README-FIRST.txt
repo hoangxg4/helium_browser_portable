@@ -14,6 +14,8 @@ Launchers in this folder
   Defender Exclusion.bat    add/remove a Defender exclusion for this whole folder
   Fix AppData leftovers.bat delete an old %LOCALAPPDATA%\imput folder left by a
                             pre-fix launcher/config (cleanup only)
+  Block AppData folder.bat  optional: deny write access to %LOCALAPPDATA%\imput so
+                            no launch path can recreate it (admin, reversible)
 
 Folders
 -------

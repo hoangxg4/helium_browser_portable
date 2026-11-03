@@ -26,6 +26,7 @@ Helium_Portable/
 ├── Apply Debloat Policies.bat  import debloater.reg (privacy + update policies)
 ├── Defender Exclusion.bat      add/remove a Defender exclusion for this folder
 ├── Fix AppData leftovers.bat   delete an old %LOCALAPPDATA%\imput leftover folder
+├── Block AppData folder.bat    optional: deny write access to %LOCALAPPDATA%\imput
 ├── README-FIRST.txt            short quick-start note (plain text)
 ├── Helium/                     browser + fixed files (must stay here)
 │   ├── chrome.exe
@@ -71,6 +72,10 @@ anywhere (a `.lnk` stores an absolute path and breaks). They call into `Helium\`
   [crbug.com/40447560](https://crbug.com/40447560)). Any child process spawned without our switches — for
   example the relaunch that follows "clear browsing data" — inherits this environment, so it cannot recreate
   the real AppData folder either. Report: issue #9.
+- That environment redirect only covers launches made **through the launcher**. `Block AppData folder.bat` is
+  the optional belt-and-braces for hand-made shortcuts and file-association launches: it denies write access to
+  `%LOCALAPPDATA%\imput` (nothing else uses that vendor folder, and this package writes Crashpad into
+  `Data\Crashpad`). It is reversible with the same script.
 - **x64 only.** The CDM is Google's build redistributed by
   [`macchrome/winchrome`](https://github.com/macchrome/winchrome) (x64 only, `update-widevine.yml` keeps it
   current and refuses to downgrade or to commit a broken payload). No arm64 Widevine CDM exists for Windows, so

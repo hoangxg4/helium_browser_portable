@@ -165,6 +165,12 @@ jobs:
           Assert ($browserBat -match 'BREAKPAD_DUMP_LOCATION=%APP_DIR%Data') "fresh: browser launcher sets an absolute BREAKPAD_DUMP_LOCATION"
           Assert ($browserBat -match '--disable-crash-reporter') "fresh: browser launcher disables the crash reporter"
           Assert (Test-Path (Join-Path $rootDir 'Fix AppData leftovers.bat')) "fresh: AppData cleanup script present"
+          Assert (Test-Path (Join-Path $rootDir 'Block AppData folder.bat')) "fresh: optional AppData ACL hardening script present"
+          # Fingerprint the launcher in the summary: when a reporter says "no
+          # change", the fastest way to tell whether they ran the shipped
+          # launcher is to compare hashes.
+          $batHash = (Get-FileHash (Join-Path $rootDir 'Helium Browser.bat') -Algorithm SHA256).Hash
+          "launcher under test: Helium Browser.bat sha256=$batHash" | Add-Content "$env:SMOKE/summary.md"
           # Artifact freshness: this workflow downloads the published release, so a
           # run fired in parallel with a build would silently test the PREVIOUS
           # zip (that produced three false FAILs on 2026-11-02). Record what was

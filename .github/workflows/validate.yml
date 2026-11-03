@@ -210,6 +210,7 @@ jobs:
           "Apply Debloat Policies.bat"
           "Defender Exclusion.bat"
           "Fix AppData leftovers.bat"
+          "Block AppData folder.bat"
           "README-FIRST.txt"
         )
         ALL_OK=true
@@ -231,8 +232,13 @@ jobs:
         grep -qF 'set "LOCALAPPDATA=%APP_DIR%Data\Local"' 'Helium Browser.bat' || { echo "  ERROR: launcher must redirect LOCALAPPDATA into the package"; exit 1; }
         grep -qF 'pushd "%APP_DIR%Helium"' 'Update Helium.bat' || { echo "  ERROR: updater launcher must run from Helium (update.bat resolves paths from its own folder)"; exit 1; }
         grep -qF 'reg import' 'Apply Debloat Policies.bat' || { echo "  ERROR: policy launcher does not import debloater.reg"; exit 1; }
+        # Optional OS-level hardening for issue #9: deny write access to the
+        # vendor folder Chromium falls back to, so any launch path is covered.
+        grep -qF 'icacls' 'Block AppData folder.bat' || { echo "  ERROR: Block AppData folder.bat does not apply an ACL"; exit 1; }
+        grep -qF '/deny' 'Block AppData folder.bat' || { echo "  ERROR: Block AppData folder.bat does not deny write access"; exit 1; }
+        grep -qF '/reset' 'Block AppData folder.bat' || { echo "  ERROR: Block AppData folder.bat must be reversible"; exit 1; }
         grep -qF 'call bypass_windows_defender.bat "%APP_DIR%"' 'Defender Exclusion.bat' || { echo "  ERROR: Defender launcher must exclude the package root, not Helium"; exit 1; }
-        for f in 'Helium Browser.bat' 'Update Helium.bat' 'Set Default Browser.bat' 'Apply Debloat Policies.bat' 'Defender Exclusion.bat' 'Fix AppData leftovers.bat'; do
+        for f in 'Helium Browser.bat' 'Update Helium.bat' 'Set Default Browser.bat' 'Apply Debloat Policies.bat' 'Defender Exclusion.bat' 'Fix AppData leftovers.bat' 'Block AppData folder.bat'; do
           # Strip CR first (CRLF files) and match a real drive path only
           # (letter + colon + slash). A loose [A-Z]: pattern also matches
           # innocent text such as 'echo ERROR: ...'.
