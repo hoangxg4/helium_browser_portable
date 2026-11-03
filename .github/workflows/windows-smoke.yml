@@ -246,8 +246,10 @@ jobs:
           #   f6 passes "%LOCALAPPDATA%" literally, to see whether Chromium expands
           #      environment variables inside a switch value (which would let the
           #      ini itself be location independent)
-          function Run-Raw([string]$label, [string[]]$extra, [string]$envValue, [string]$dumpLoc) {
+          function Run-Raw([string]$label, [string[]]$extra, [string]$envValue, [string]$dumpLoc, [string]$localAppData) {
             $dumpLoc = if ($dumpLoc) { $dumpLoc } else { '..\Data\Crashpad' }
+            $savedLad = $env:LOCALAPPDATA
+            if ($localAppData) { $env:LOCALAPPDATA = $localAppData }
             Remove-Item $imputRoot -Recurse -Force -ErrorAction SilentlyContinue
             Remove-Item "$root/Data" -Recurse -Force -ErrorAction SilentlyContinue
             if ($envValue) { $env:BREAKPAD_DUMP_LOCATION = $envValue } else { Remove-Item Env:BREAKPAD_DUMP_LOCATION -ErrorAction SilentlyContinue }
@@ -273,6 +275,7 @@ jobs:
             }
             Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
             Start-Sleep 2
+            if ($localAppData) { $env:LOCALAPPDATA = $savedLad }
             $base = Test-Path (Join-Path $imputRoot 'Helium')
             $crash = Test-Path (Join-Path $imputRoot 'Helium\User Data\Crashpad')
             $portable = Test-Path "$root/Data/Crashpad"
@@ -297,6 +300,24 @@ jobs:
           # f9 reproduces the SHIPPED launcher flags exactly (absolute dump path,
           # explicit user-data-dir, crash reporter off).
           $f9 = Run-Raw 'f9-shipped-launcher-flags' @("--user-data-dir=$root\Data",'--disable-crash-reporter') '' (Join-Path $root 'Data\Crashpad')
+
+          # G batch: reproduce the reporter's EXACT command line (issue #9
+          # comment 6602451860) and test the two remaining candidate defences —
+          # --portable, and overriding LOCALAPPDATA so the default user data
+          # directory itself cannot land in the real AppData.
+          $theirFlags = @(
+            "--user-data-dir=$root\Data",
+            "--disk-cache-dir=$root\Cache",
+            '--disable-crash-reporter',
+            '--portable',
+            '--disable-features=PrintCompositorLPAC,WinSboxNoFakeGdiInit'
+          )
+          $g1 = Run-Raw 'g1-their-flags-relative' $theirFlags '' '..\Data\Crashpad'
+          $g2 = Run-Raw 'g2-their-flags-absolute' $theirFlags '' (Join-Path $root 'Data\Crashpad')
+          $g3 = Run-Raw 'g3-localappdata-redirect' $theirFlags '' (Join-Path $root 'Data\Crashpad') (Join-Path $root 'Data\Local')
+          $ladProbe = Join-Path $root 'Data\Local\imput'
+          "[g3 follow-up] redirected LOCALAPPDATA result: real-appdata-imput=$(Test-Path $imputRoot); redirected-imput=$([bool](Test-Path $ladProbe))" | Add-Content "$env:SMOKE/summary.md"
+          "issue9-lad=$(($g1.base -or $g2.base))" | Add-Content "$env:SMOKE/issue9b.txt"
           $f8 = Run-Raw 'f8-headed-no-crash-reporter' @('--disable-crash-reporter','chrome://version') ''
           $f2 = Run-Raw 'f2-no-crash-reporter' @('--disable-crash-reporter') ''
           $f3 = Run-Raw 'f3-env-var' @() (Join-Path $root 'Data\Crashpad')
