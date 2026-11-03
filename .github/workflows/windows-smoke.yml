@@ -523,7 +523,10 @@ jobs:
           }
           "$rob`ncdm=$cdmLine" | Set-Content "$env:SMOKE/eme-rob.txt"
           "Robustness matrix: $rob" | Add-Content "$env:SMOKE/summary.md"
-          "Meaning — NONE=no security requirement; SW_*=software (L3) paths; HW_*=hardware (L1) paths. A software-CDM build answers SW_* and rejects HW_*; an L3-only device cannot be upgraded to L1 from a portable zip (L1 needs OEM-provisioned hardware TEE, not a shipped file)." | Add-Content "$env:SMOKE/summary.md"
+          "Meaning — NONE=no security requirement; SW_*=software (L3) paths; HW_*=hardware (L1) paths. This CI measurement is unreliable (see the NO_RESULT comment below); the authoritative capability profile is the user-reported Axinom DRM Policy Tester run on real hardware: L3 cenc+cbcs OK, L1 cenc+cbcs rejected, PlayReady absent. L1 needs a device TEE + authorised CDM + an L1-issuing licence server, none of which a portable zip can provide." | Add-Content "$env:SMOKE/summary.md"
+          if ($rob -eq 'NO_RESULT') {
+            "NOTE: no matrix this run — chrome dumps the DOM before the async EME probe settles in headless CI. Not a DRM regression: Phase A/B prove the CDM registers and answers CDM_OK." | Add-Content "$env:SMOKE/summary.md"
+          }
           (Get-Content $err -ErrorAction SilentlyContinue | Where-Object { $_ -match 'widevine|cdm' } | Select-Object -First 5) |
             Add-Content "$env:SMOKE/summary.md"
 
