@@ -46,6 +46,10 @@ Notes
 
 -----
 
+* Starting through "Helium Browser.bat" also keeps %LOCALAPPDATA% inside the
+  package (Data\Local). That is what stops Chromium from recreating
+  %LOCALAPPDATA%\imput\Helium\User Data\Crashpad through a child process, so
+  launching chrome.exe by hand loses that protection.
 * Always start the browser through "Helium Browser.bat" or a shortcut whose
 
   "Start in" is the Helium\ folder. Launching Helium\chrome.exe from an
