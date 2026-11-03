@@ -70,8 +70,19 @@ anywhere (a `.lnk` stores an absolute path and breaks). They call into `Helium\`
   current and refuses to downgrade or to commit a broken payload). No arm64 Widevine CDM exists for Windows, so
   the **arm64 build ships no CDM at all** — it cannot play DRM-protected streams. Shipping the x64 module in the
   arm64 zip only created a package that looked DRM-enabled and silently failed.
-- Playback security level is decided by the CDM and the license server, not by this package. Hardware-backed
-  levels (`HW_SECURE_*`, i.e. L1) need OEM-provisioned hardware; nothing in a portable zip can add them.
+- Playback security level is decided by the CDM and the license server, not by this package. Verified on a
+  Windows machine with this build ([Axinom DRM Policy Tester](https://tools.axinom.com/drm-tools/drm-policy-tester)):
+  `Widevine L3 (cenc/cbcs)` ✅, `Widevine L1 (cenc/cbcs)` ❌, all `PlayReady` key systems ❌.
+- **L3 is the software path and is what this package can and does deliver.** It is enough for the DRM catalogues
+  that accept L3 (typically resolved at 480p–720p).
+- **L1 cannot be added by a portable package.** `HW_SECURE_ALL` needs three things that live outside the browser
+  files: a trusted execution environment on the device (Windows `Media Foundation` hardware DRM / OEM TEE),
+  a CDM that is authorised to use it, and a license server that issues an L1 licence. Installing a CDM file is
+  the only one of the three a zip can do. If a service demands L1, it needs hardware that supports it — see
+  `chrome://gpu` → "Media Foundation" and the "Hardware DRM" entries for the machine's own capability.
+- PlayReady is not fixable for this build: Chromium only implements it through Windows `Media Foundation`, and
+  the software key system (`com.microsoft.playready` with SL2000) is not enabled, which is why every PlayReady
+  row fails in a Chromium-based browser. Edge/SL3000 is a separate implementation.
 
 ### Usage
 1. Download the latest release zip
