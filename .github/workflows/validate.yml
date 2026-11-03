@@ -225,6 +225,10 @@ jobs:
         grep -qF 'set "BREAKPAD_DUMP_LOCATION=%APP_DIR%Data\Crashpad"' 'Helium Browser.bat' || { echo "  ERROR: launcher must set an absolute BREAKPAD_DUMP_LOCATION"; exit 1; }
         grep -qF -- '--breakpad-dump-location="%APP_DIR%Data\Crashpad"' 'Helium Browser.bat' || { echo "  ERROR: launcher must pass an absolute --breakpad-dump-location"; exit 1; }
         grep -qF -- '--disable-crash-reporter' 'Helium Browser.bat' || { echo "  ERROR: launcher must disable the crash reporter"; exit 1; }
+        # Last line of defence for issue #9: a child process spawned without our
+        # switches still derives its default user data dir from %LOCALAPPDATA%,
+        # so the launcher redirects it into the package.
+        grep -qF 'set "LOCALAPPDATA=%APP_DIR%Data\Local"' 'Helium Browser.bat' || { echo "  ERROR: launcher must redirect LOCALAPPDATA into the package"; exit 1; }
         grep -qF 'pushd "%APP_DIR%Helium"' 'Update Helium.bat' || { echo "  ERROR: updater launcher must run from Helium (update.bat resolves paths from its own folder)"; exit 1; }
         grep -qF 'reg import' 'Apply Debloat Policies.bat' || { echo "  ERROR: policy launcher does not import debloater.reg"; exit 1; }
         grep -qF 'call bypass_windows_defender.bat "%APP_DIR%"' 'Defender Exclusion.bat' || { echo "  ERROR: Defender launcher must exclude the package root, not Helium"; exit 1; }

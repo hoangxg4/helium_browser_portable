@@ -65,6 +65,12 @@ anywhere (a `.lnk` stores an absolute path and breaks). They call into `Helium\`
   `--breakpad-dump-location`, sets `BREAKPAD_DUMP_LOCATION`, and adds `--disable-crash-reporter` so Crashpad
   never initialises its database in `%LOCALAPPDATA%\imput\Helium\User Data\Crashpad`. `Fix AppData
   leftovers.bat` removes a folder left behind by an older launcher.
+- `Helium Browser.bat` additionally **redirects `%LOCALAPPDATA%`** into `Data\Local`. Chromium builds the
+  Crashpad path from the *default* user data directory, which is `%LOCALAPPDATA%`-derived and ignores both
+  `--user-data-dir` and `--breakpad-dump-location` (`chrome/common/chrome_paths.cc`,
+  [crbug.com/40447560](https://crbug.com/40447560)). Any child process spawned without our switches — for
+  example the relaunch that follows "clear browsing data" — inherits this environment, so it cannot recreate
+  the real AppData folder either. Report: issue #9.
 - **x64 only.** The CDM is Google's build redistributed by
   [`macchrome/winchrome`](https://github.com/macchrome/winchrome) (x64 only, `update-widevine.yml` keeps it
   current and refuses to downgrade or to commit a broken payload). No arm64 Widevine CDM exists for Windows, so

@@ -315,7 +315,13 @@ jobs:
           $g1 = Run-Raw 'g1-their-flags-relative' $theirFlags '' '..\Data\Crashpad'
           $g2 = Run-Raw 'g2-their-flags-absolute' $theirFlags '' (Join-Path $root 'Data\Crashpad')
           $g3 = Run-Raw 'g3-localappdata-redirect' $theirFlags '' (Join-Path $root 'Data\Crashpad') (Join-Path $root 'Data\Local')
+          # g4: exactly what the shipped launcher now does, including creating the
+          # redirected folder first (the crashpad handler cannot create parents).
+          $g4Local = Join-Path $root 'Data\Local'
+          if (-not (Test-Path (Join-Path $g4Local 'imput'))) { New-Item -ItemType Directory -Force (Join-Path $g4Local 'imput') | Out-Null }
+          $g4 = Run-Raw 'g4-shipped-launcher-redirect' $theirFlags '' (Join-Path $root 'Data\Crashpad') $g4Local
           $ladProbe = Join-Path $root 'Data\Local\imput'
+          Assert (-not $g4.base) "g4: shipped launcher config keeps %LOCALAPPDATA%\imput out of the real AppData"
           "[g3 follow-up] redirected LOCALAPPDATA result: real-appdata-imput=$(Test-Path $imputRoot); redirected-imput=$([bool](Test-Path $ladProbe))" | Add-Content "$env:SMOKE/summary.md"
           "issue9-lad=$(($g1.base -or $g2.base))" | Add-Content "$env:SMOKE/issue9b.txt"
           $f8 = Run-Raw 'f8-headed-no-crash-reporter' @('--disable-crash-reporter','chrome://version') ''
