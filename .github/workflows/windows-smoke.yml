@@ -605,6 +605,117 @@ jobs:
             "DIAGNOSIS: not reproduced even with Browser.clearBrowsingData on real Windows; the leak is environment-specific to the reporter's machine." | Add-Content "$env:SMOKE/summary.md"
           }
           if ($fail.Count -gt 0) { throw "Phase H failed: $($fail -join '; ')" }
+      - name: Phase I — metrics-consent repro (issue #9 root cause)
+        id: phaseI
+        continue-on-error: true
+        run: |
+          # Root cause from source: crashpad_win.cc creates the METRICS directory
+          # recursively with CHECK(CreateDirectoryAndGetError(metrics_path)), and
+          # ChromeCrashReporterClient::GetCrashMetricsLocation() answers with
+          # install_static::GetUserDataDirectory() — the *install-static* default
+          # user data dir (%LOCALAPPDATA%\imput\Helium\User Data), which ignores
+          # --user-data-dir and --breakpad-dump-location. It only runs when
+          # GetCollectStatsConsent() is true, which on Windows comes from
+          # HKCU Software\<company>\<product> "UsageStats"=1 (or the
+          # MetricsReportingEnabled policy). A pristine CI profile has neither,
+          # which is why every earlier phase measured "no leak".
+          $fail = [System.Collections.Generic.List[string]]::new()
+          function Assert([bool]$cond, [string]$msg) {
+            if ($cond) { "PASS: $msg" | Add-Content "$env:SMOKE/summary.md" }
+            else { "FAIL: $msg" | Add-Content "$env:SMOKE/summary.md"; $script:fail.Add($msg) }
+          }
+          "" | Add-Content "$env:SMOKE/summary.md"
+          "## Phase I — metrics-consent reproduction (issue #9 root cause)" | Add-Content "$env:SMOKE/summary.md"
+
+          $app = "$env:SMOKE/fresh/Helium_Portable/Helium"
+          $root = "$env:SMOKE/fresh/Helium_Portable"
+          $imputRoot = Join-Path $env:LOCALAPPDATA 'imput'
+          $clientStateKeys = @('HKCU:\Software\Helium', 'HKCU:\Software\imput\Helium')
+          $policyKeys = @('HKLM:\SOFTWARE\Policies\Helium', 'HKLM:\SOFTWARE\Policies\imput\Helium', 'HKCU:\SOFTWARE\Policies\Helium')
+
+          function Set-Consent([bool]$on) {
+            foreach ($k in $clientStateKeys) {
+              if ($on) {
+                if (-not (Test-Path $k)) { New-Item -Path $k -Force | Out-Null }
+                New-ItemProperty -Path $k -Name 'UsageStats' -Value 1 -PropertyType DWord -Force | Out-Null
+              } else {
+                Remove-ItemProperty -Path $k -Name 'UsageStats' -ErrorAction SilentlyContinue
+              }
+            }
+          }
+          function Set-Policy([string]$key, [object]$value) {
+            if ($null -eq $value) {
+              Remove-ItemProperty -Path $key -Name 'MetricsReportingEnabled' -ErrorAction SilentlyContinue
+              return
+            }
+            if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+            New-ItemProperty -Path $key -Name 'MetricsReportingEnabled' -Value $value -PropertyType DWord -Force | Out-Null
+          }
+          function Clear-Policies {
+            foreach ($k in $policyKeys) { Set-Policy $k $null }
+          }
+
+          function Run-ConsentTest([string]$label, [bool]$consent, [string]$policyKey, [bool]$redirectLad) {
+            Remove-Item $imputRoot -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item "$root/Data" -Recurse -Force -ErrorAction SilentlyContinue
+            Set-Consent $consent
+            Clear-Policies
+            if ($policyKey) { Set-Policy $policyKey 0 }
+            $saved = $env:LOCALAPPDATA
+            $lad = Join-Path $root 'Data\Local'
+            if ($redirectLad) {
+              if (-not (Test-Path (Join-Path $lad 'imput'))) { New-Item -ItemType Directory -Force (Join-Path $lad 'imput') | Out-Null }
+              $env:LOCALAPPDATA = $lad
+            }
+            $launch = @('--no-first-run','--no-default-browser-check','--headless=new','--disable-gpu',
+                        "--user-data-dir=$root\Data","--breakpad-dump-location=$root\Data\Crashpad",
+                        '--disable-crash-reporter','about:blank')
+            try {
+              $p = Start-Process -FilePath "$app\chrome.exe" -ArgumentList $launch -WorkingDirectory $app -PassThru `
+                   -WindowStyle Hidden -RedirectStandardError "$env:SMOKE/i-$label-err.txt" `
+                   -RedirectStandardOutput "$env:SMOKE/i-$label-out.txt"
+              if (-not $p.WaitForExit(30000)) { try { $p.Kill($true) } catch {} ; $p.WaitForExit(5000) }
+            } catch {
+              "[$label] launch failed: $($_.Exception.Message)" | Add-Content "$env:SMOKE/summary.md"
+            }
+            Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            if ($redirectLad) { $env:LOCALAPPDATA = $saved }
+            $realLeak = Test-Path (Join-Path $imputRoot 'Helium')
+            $fakeLeak = Test-Path (Join-Path $lad 'imput\Helium')
+            $userData = Test-Path (Join-Path $imputRoot 'Helium\User Data')
+            "[$label] consent=$consent policy=$(if ($policyKey) { $policyKey } else { 'none' }) redirect=$redirectLad -> imput\Helium=$realLeak; 'User Data'=$userData; redirected:imput\Helium=$fakeLeak" |
+              Add-Content "$env:SMOKE/summary.md"
+            if ($realLeak) {
+              (Get-ChildItem $imputRoot -Recurse -Force | Select-Object -First 10 | ForEach-Object { "  LEAK: $($_.FullName)" }) |
+                Add-Content "$env:SMOKE/summary.md"
+            }
+            return @{ real = $realLeak; userData = $userData; fake = $fakeLeak }
+          }
+
+          $i1 = Run-ConsentTest 'i1-consent-on-no-policy' $true '' $false
+          $i2 = Run-ConsentTest 'i2-consent-on-policy-Helium' $true 'HKLM:\SOFTWARE\Policies\Helium' $false
+          $i3 = Run-ConsentTest 'i3-consent-on-policy-imput-Helium' $true 'HKLM:\SOFTWARE\Policies\imput\Helium' $false
+          $i4 = Run-ConsentTest 'i4-consent-on-launcher-redirect' $true '' $true
+          $i5 = Run-ConsentTest 'i5-consent-off-control' $false '' $false
+
+          Set-Consent $false
+          Clear-Policies
+          "issue9-consent=i1=$($i1.real);i2=$($i2.real);i3=$($i3.real);i4=$($i4.real);i5=$($i5.real)" |
+            Set-Content "$env:SMOKE/issue9d.txt"
+
+          if ($i1.real) {
+            "ROOT CAUSE CONFIRMED: with metrics consent on, launching the shipped configuration creates %LOCALAPPDATA%\imput\Helium\User Data — the metrics directory of the install-static default user data dir, exactly as crashpad_win.cc does. This is the reporter's symptom." | Add-Content "$env:SMOKE/summary.md"
+            Assert ($i4.real -eq $false) "launcher LOCALAPPDATA redirect keeps it out of the real AppData"
+            Assert ($i4.fake) "the redirected copy lands inside the package (Data\Local\imput\Helium)"
+            if ($i2.real -eq $false) { "POLICY: MetricsReportingEnabled=0 under HKLM\SOFTWARE\Policies\Helium prevents the folder." | Add-Content "$env:SMOKE/summary.md" }
+            if ($i3.real -eq $false) { "POLICY: MetricsReportingEnabled=0 under HKLM\SOFTWARE\Policies\imput\Helium prevents the folder." | Add-Content "$env:SMOKE/summary.md" }
+          } elseif ($i5.real) {
+            "UNEXPECTED: folder appears even without consent — the metrics path is not the trigger." | Add-Content "$env:SMOKE/summary.md"
+          } else {
+            "NOT REPRODUCED: consent via HKCU UsageStats did not create the folder in CI; the trigger may need Helium's own ClientState key path or a real user session." | Add-Content "$env:SMOKE/summary.md"
+          }
+          if ($fail.Count -gt 0) { throw "Phase I failed: $($fail -join '; ')" }
       - name: Phase D — Widevine robustness matrix (L1 vs L3, best effort)
         id: phaseD
         continue-on-error: true
