@@ -507,6 +507,104 @@ jobs:
 
           if ($fail.Count -gt 0) { throw "Phase C failed: $($fail -join '; ')" }
 
+      - name: Phase H — clear browsing data via CDP (the reporter's trigger)
+        id: phaseH
+        continue-on-error: true
+        run: |
+          $fail = [System.Collections.Generic.List[string]]::new()
+          function Assert([bool]$cond, [string]$msg) {
+            if ($cond) { "PASS: $msg" | Add-Content "$env:SMOKE/summary.md" }
+            else { "FAIL: $msg" | Add-Content "$env:SMOKE/summary.md"; $script:fail.Add($msg) }
+          }
+          "" | Add-Content "$env:SMOKE/summary.md"
+          "## Phase H — clear browsing data via Browser.clearBrowsingData (issue #9 trigger)" | Add-Content "$env:SMOKE/summary.md"
+
+          $app = "$env:SMOKE/fresh/Helium_Portable/Helium"
+          $root = "$env:SMOKE/fresh/Helium_Portable"
+          $imputRoot = Join-Path $env:LOCALAPPDATA 'imput'
+
+          function Invoke-ClearBrowsingData([int]$port) {
+            $ver = $null
+            foreach ($try in 1..24) {
+              try { $ver = Invoke-RestMethod "http://127.0.0.1:$port/json/version" -TimeoutSec 3; break }
+              catch { Start-Sleep -Milliseconds 500 }
+            }
+            if (-not $ver) { return 'NO_DEBUG_ENDPOINT' }
+            $client = [System.Net.WebSockets.ClientWebSocket]::new()
+            try {
+              $null = $client.ConnectAsync([Uri]$ver.webSocketDebuggerUrl, [Threading.CancellationToken]::None).Wait(15000)
+              $payload = '{"id":1,"method":"Browser.clearBrowsingData","params":{"browsingDataTypes":["browsingHistory","cache","cookies","downloadHistory","formData","passwordSignin","siteSettings","hostedAppData"]}}'
+              $bytes = [Text.Encoding]::UTF8.GetBytes($payload)
+              $null = $client.SendAsync([ArraySegment[byte]]::new($bytes), [Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).Wait(15000)
+              $buf = New-Object byte[] 16384
+              $rec = $client.ReceiveAsync([ArraySegment[byte]]::new($buf), [Threading.CancellationToken]::None).Result
+              $text = [Text.Encoding]::UTF8.GetString($buf, 0, $rec.Count)
+              if ($text -match '"error"') { return "CDP_ERROR: $text" }
+              return 'CLEARED'
+            } catch {
+              return "CDP_EXCEPTION: $($_.Exception.Message)"
+            } finally { try { $client.Dispose() } catch {} }
+          }
+
+          function Run-ClearTest([string]$label, [string[]]$extra, [string]$localAppData) {
+            Remove-Item $imputRoot -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item "$root/Data" -Recurse -Force -ErrorAction SilentlyContinue
+            $saved = $env:LOCALAPPDATA
+            if ($localAppData) {
+              if (-not (Test-Path (Join-Path $localAppData 'imput'))) { New-Item -ItemType Directory -Force (Join-Path $localAppData 'imput') | Out-Null }
+              $env:LOCALAPPDATA = $localAppData
+            }
+            $port = 9333
+            $log = "$env:SMOKE/h-$label-err.txt"
+            $launch = @(
+              '--no-first-run','--no-default-browser-check',
+              '--headless=new','--disable-gpu',
+              "--remote-debugging-port=$port",'--remote-allow-origins=*',
+              "--breakpad-dump-location=$root\Data\Crashpad",
+              '--disable-crash-reporter','about:blank'
+            ) + $extra
+            $result = 'NOT_LAUNCHED'
+            try {
+              $p = Start-Process -FilePath "$app\chrome.exe" -ArgumentList $launch -WorkingDirectory $app -PassThru `
+                   -WindowStyle Hidden -RedirectStandardError $log -RedirectStandardOutput "$env:SMOKE/h-$label-out.txt"
+              $result = Invoke-ClearBrowsingData $port
+              Start-Sleep -Seconds 5
+              Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 2
+            } catch {
+              $result = "LAUNCH_FAILED: $($_.Exception.Message)"
+            } finally {
+              Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue
+              if ($localAppData) { $env:LOCALAPPDATA = $saved }
+            }
+            $leak = Test-Path (Join-Path $imputRoot 'Helium')
+            $portable = Test-Path "$root/Data/Crashpad"
+            "[$label] clear=$result; imput\Helium=$leak; portableCrashpad=$portable" | Add-Content "$env:SMOKE/summary.md"
+            if ($leak) {
+              (Get-ChildItem $imputRoot -Recurse -Force | Select-Object -First 12 | ForEach-Object { "  LEAK: $($_.FullName)" }) |
+                Add-Content "$env:SMOKE/summary.md"
+            }
+            $errHits = @()
+            if (Test-Path $log) {
+              $errHits = Get-Content $log -ErrorAction SilentlyContinue |
+                Where-Object { $_ -match 'crashpad|breakpad|crash-dumps' } | Select-Object -First 3
+            }
+            if ($errHits) { $errHits | ForEach-Object { "  stderr: $($_.Trim())" } | Add-Content "$env:SMOKE/summary.md" }
+            return @{ leak = $leak; portable = $portable; clear = $result }
+          }
+
+          $h1 = Run-ClearTest 'h1-shipped-flags-no-lad' @("--user-data-dir=$root\Data") ''
+          $h2 = Run-ClearTest 'h2-shipped-flags-with-lad' @("--user-data-dir=$root\Data") (Join-Path $root 'Data\Local')
+          $h3 = Run-ClearTest 'h3-no-user-data-dir-control' @() ''
+
+          "issue9-clear-h1=$($h1.leak);h2=$($h2.leak);h3=$($h3.leak)" | Add-Content "$env:SMOKE/issue9c.txt"
+          Assert (-not $h2.leak) "h2 (shipped config): clearing browsing data did not recreate %LOCALAPPDATA%\imput"
+          if ($h1.leak -or $h3.leak) {
+            "DIAGNOSIS: the trigger is REPRODUCED — clearing browsing data recreates %LOCALAPPDATA%\imput%opts%." -replace '%opts%', "$(if ($h1.leak) { ' without the LOCALAPPDATA redirect' } else { '' })$(if ($h3.leak) { ' and with no --user-data-dir' } else { '' })" | Add-Content "$env:SMOKE/summary.md"
+          } else {
+            "DIAGNOSIS: not reproduced even with Browser.clearBrowsingData on real Windows; the leak is environment-specific to the reporter's machine." | Add-Content "$env:SMOKE/summary.md"
+          }
+          if ($fail.Count -gt 0) { throw "Phase H failed: $($fail -join '; ')" }
       - name: Phase D — Widevine robustness matrix (L1 vs L3, best effort)
         id: phaseD
         continue-on-error: true
