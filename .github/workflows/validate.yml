@@ -101,6 +101,11 @@ jobs:
           exit 1
         fi
         grep -qF 'ComponentUpdatesEnabled' debloater.reg || { echo "  ERROR: component updates must stay disabled via debloater.reg policy"; exit 1; }
+        # issue #9: the AppData folder is the crashpad METRICS directory, created
+        # whenever GetCollectStatsConsent() is true; the policy must stay so the
+        # consent cannot be granted (or re-granted) on a user machine.
+        grep -qF '"MetricsReportingEnabled"=dword:00000000' debloater.reg || { echo "  ERROR: debloater.reg must disable MetricsReportingEnabled (issue #9 AppData folder)"; exit 1; }
+        grep -qF '[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\imput\Helium]' debloater.reg || { echo "  ERROR: debloater.reg must also cover the install-static policy path"; exit 1; }
         echo "  issue #10 guard: OK (no --disable-component-update; policy keeps updates off)"
 
         # issue #9 regression guard: Crashpad lives in

@@ -135,6 +135,19 @@ Windows Registry Editor Version 5.00
 "UpdateDefault"=dword:00000000
 "AutoUpdateCheckPeriodMinutes"=dword:00000000
 
+; Disable metrics / crash-reporting consent (issue #9).
+; Chromium creates the Crashpad *metrics* directory recursively
+; (components/crash/core/app/crashpad_win.cc:
+; CHECK(base::CreateDirectoryAndGetError(metrics_path))) whenever
+; GetCollectStatsConsent() is true, and that path comes from
+; install_static::GetUserDataDirectory() - the install-static default user data
+; dir (%LOCALAPPDATA%\imput\Helium\User Data) - so neither --user-data-dir nor
+; --breakpad-dump-location applies and the folder appears in AppData.
+; This policy flips the consent off (chrome/install_static/install_util.cc
+; ReportingIsEnforcedByPolicy reads MetricsReportingEnabled first), which stops
+; the directory from being created at all.
+"MetricsReportingEnabled"=dword:00000000
+
 ; Disable component updates
 ; NOTE (issue #10): this policy — not the ``--disable-component-update`` command
 ; line switch — is what keeps component updates off. The switch also disables
@@ -143,3 +156,11 @@ Windows Registry Editor Version 5.00
 ; chrome++.ini. This policy blocks downloads/updates without gating
 ; preinstalled-component registration.
 "ComponentUpdatesEnabled"=dword:00000000
+
+; Same switch under the install-static policy path (SOFTWARE\Policies\<vendor>\<product>).
+; install_static::ReportingIsEnforcedByPolicy() builds its key from the install
+; subdirectory, which for this build is "imput\Helium" (that is why the rejected
+; folder is %LOCALAPPDATA%\imput\Helium\User Data). Both paths are set so the
+; consent cannot depend on which one the build reads.
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\imput\Helium]
+"MetricsReportingEnabled"=dword:00000000

@@ -72,6 +72,13 @@ anywhere (a `.lnk` stores an absolute path and breaks). They call into `Helium\`
   [crbug.com/40447560](https://crbug.com/40447560)). Any child process spawned without our switches — for
   example the relaunch that follows "clear browsing data" — inherits this environment, so it cannot recreate
   the real AppData folder either. Report: issue #9.
+- The folder Chromium tries to create is the Crashpad **metrics** directory: `crashpad_win.cc` runs
+  `CHECK(base::CreateDirectoryAndGetError(metrics_path))` and `GetCrashMetricsLocation()` answers with the
+  **install-static** default user data dir (`%LOCALAPPDATA%\imput\Helium\User Data`) whenever
+  `GetCollectStatsConsent()` is true — which is why `--user-data-dir` and `--breakpad-dump-location` cannot
+  prevent it, and why it shows up only after the browser has been used. `debloater.reg` therefore sets
+  `MetricsReportingEnabled=0` (under both `SOFTWARE\Policies\Helium` and the install-static
+  `SOFTWARE\Policies\imput\Helium`), which turns that consent off at the source.
 - That environment redirect only covers launches made **through the launcher**. `Block AppData folder.bat` is
   the optional belt-and-braces for hand-made shortcuts and file-association launches: it denies write access to
   `%LOCALAPPDATA%\imput` (nothing else uses that vendor folder, and this package writes Crashpad into

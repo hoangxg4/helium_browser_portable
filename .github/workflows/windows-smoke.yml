@@ -669,7 +669,8 @@ jobs:
             }
             $launch = @('--no-first-run','--no-default-browser-check','--headless=new','--disable-gpu',
                         "--user-data-dir=$root\Data","--breakpad-dump-location=$root\Data\Crashpad",
-                        '--disable-crash-reporter','about:blank')
+                        'about:blank')
+            if (-not $label.StartsWith('i0-')) { $launch = $launch[0..($launch.Count-2)] + @('--disable-crash-reporter','about:blank') }
             try {
               $p = Start-Process -FilePath "$app\chrome.exe" -ArgumentList $launch -WorkingDirectory $app -PassThru `
                    -WindowStyle Hidden -RedirectStandardError "$env:SMOKE/i-$label-err.txt" `
@@ -693,6 +694,7 @@ jobs:
             return @{ real = $realLeak; userData = $userData; fake = $fakeLeak }
           }
 
+          $i0 = Run-ConsentTest 'i0-consent-on-no-crash-reporter-flag' $true '' $false
           $i1 = Run-ConsentTest 'i1-consent-on-no-policy' $true '' $false
           $i2 = Run-ConsentTest 'i2-consent-on-policy-Helium' $true 'HKLM:\SOFTWARE\Policies\Helium' $false
           $i3 = Run-ConsentTest 'i3-consent-on-policy-imput-Helium' $true 'HKLM:\SOFTWARE\Policies\imput\Helium' $false
@@ -701,8 +703,11 @@ jobs:
 
           Set-Consent $false
           Clear-Policies
-          "issue9-consent=i1=$($i1.real);i2=$($i2.real);i3=$($i3.real);i4=$($i4.real);i5=$($i5.real)" |
+          "issue9-consent=i0=$($i0.real);i1=$($i1.real);i2=$($i2.real);i3=$($i3.real);i4=$($i4.real);i5=$($i5.real)" |
             Set-Content "$env:SMOKE/issue9d.txt"
+          if ($i0.real -and -not $i1.real) {
+            "SIGNAL: the folder appears WITHOUT --disable-crash-reporter and not with it, so that switch alone suppresses the metrics path here; the reporter's build starts the crashpad handler anyway, which is the remaining difference." | Add-Content "$env:SMOKE/summary.md"
+          }
 
           if ($i1.real) {
             "ROOT CAUSE CONFIRMED: with metrics consent on, launching the shipped configuration creates %LOCALAPPDATA%\imput\Helium\User Data — the metrics directory of the install-static default user data dir, exactly as crashpad_win.cc does. This is the reporter's symptom." | Add-Content "$env:SMOKE/summary.md"
